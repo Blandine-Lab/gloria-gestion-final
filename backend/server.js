@@ -799,12 +799,15 @@ app.get('/api/auth/me', async (req, res) => {
 });
 
 // =============================================
-// ✅ EXPORT POUR VERCEL (Express natif)
+// ✅ EXPORT POUR SERVERLESS (Vercel / Netlify)
 // =============================================
 export default app;
 
-// Pour le développement local
-if (process.env.NODE_ENV !== 'production') {
+// =============================================
+// DÉMARRAGE DU SERVEUR POUR RENDER (exécution directe)
+// =============================================
+// Détecter si le fichier est exécuté directement (pas importé)
+if (import.meta.url === `file://${process.argv[1]}`) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
     console.log(`🚀 Backend démarré sur http://localhost:${PORT}`);
