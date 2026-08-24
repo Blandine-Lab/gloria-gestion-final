@@ -15,7 +15,7 @@ const Parametres = () => {
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('http://localhost:5000/api/settings');
+      const response = await axios.get('/settings');
       if (response.data.success) {
         const settingsObj = {};
         response.data.data.forEach(s => {
@@ -44,7 +44,7 @@ const Parametres = () => {
     setSuccess(false);
     try {
       for (const [key, value] of Object.entries(settings)) {
-        await axios.put(`http://localhost:5000/api/settings/${key}`, { value });
+        await axios.put(`/settings/${key}`, { value });
       }
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);

@@ -125,7 +125,7 @@ const Admin = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await axios.get('http://localhost:5000/api/users');
+      const response = await axios.get('/users');
       if (response.data.success) {
         setUsers(response.data.data);
       }
@@ -436,9 +436,9 @@ const Admin = () => {
     try {
       let response;
       if (editingUser) {
-        response = await axios.put(`http://localhost:5000/api/users/${editingUser.id}`, userForm);
+        response = await axios.put(`/users/${editingUser.id}`, userForm);
       } else {
-        response = await axios.post('http://localhost:5000/api/users', userForm);
+        response = await axios.post('/users', userForm);
       }
       if (response.data.success) {
         closeUserModal();
@@ -458,7 +458,7 @@ const Admin = () => {
   const deleteUser = async (id) => {
     if (!confirm('Supprimer cet utilisateur définitivement ?')) return;
     try {
-      await axios.delete(`http://localhost:5000/api/users/${id}`);
+      await axios.delete(`/users/${id}`);
       fetchUsers();
       setMessage({ text: '✅ Utilisateur supprimé', type: 'success' });
     } catch (error) {

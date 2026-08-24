@@ -48,7 +48,7 @@ const EntreesOperateurs = () => {
     setMessage({ text: '', type: '' });
 
     try {
-      const response = await axios.post('http://localhost:5000/api/operator/stock/add', {
+      const response = await axios.post('/operator/stock/add', {
         operator_id: selectedOperator,
         type: type,
         quantity: parseInt(quantity)

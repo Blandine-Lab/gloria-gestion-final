@@ -50,7 +50,7 @@ const Entrees = () => {
 
     try {
       // Appel au backend pour enregistrer un mouvement de type 'supplier_in'
-      const response = await axios.post('http://localhost:5000/api/movement', {
+      const response = await axios.post('/movement', {
         product_id: selectedProduct,
         quantity: totalBottles,
         movement_type: 'supplier_in',

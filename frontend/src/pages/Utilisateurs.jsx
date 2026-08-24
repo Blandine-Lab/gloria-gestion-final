@@ -22,7 +22,7 @@ const Utilisateurs = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('http://localhost:5000/api/users');
+      const response = await axios.get('/users');
       if (response.data.success) {
         setUsers(response.data.data);
         setError(null);
@@ -83,9 +83,9 @@ const Utilisateurs = () => {
     try {
       let response;
       if (editingUser) {
-        response = await axios.put(`http://localhost:5000/api/users/${editingUser.id}`, formData);
+        response = await axios.put(`/users/${editingUser.id}`, formData);
       } else {
-        response = await axios.post('http://localhost:5000/api/users', formData);
+        response = await axios.post('/users', formData);
       }
       if (response.data.success) {
         closeModal();
@@ -102,7 +102,7 @@ const Utilisateurs = () => {
   const deleteUser = async (id) => {
     if (!window.confirm('Supprimer cet utilisateur définitivement ?')) return;
     try {
-      await axios.delete(`http://localhost:5000/api/users/${id}`);
+      await axios.delete(`/users/${id}`);
       fetchUsers();
     } catch (err) {
       console.error(err);

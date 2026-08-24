@@ -49,7 +49,7 @@ const Stocks = () => {
         await syncAllData(); // Cette fonction met à jour toutes les tables
 
         // Récupérer les produits mis à jour depuis Supabase
-        const response = await axios.get('http://localhost:5000/api/dashboard/stats');
+        const response = await axios.get('/dashboard/stats');
         if (response.data.success) {
           const productsData = response.data.data.products || [];
           // Mettre à jour la base locale
@@ -95,7 +95,7 @@ const Stocks = () => {
       // Mais le suivi journalier est calculé côté serveur, donc on le récupère via API
       // Si hors ligne, on affiche un message
       if (isOnline) {
-        const response = await axios.get('http://localhost:5000/api/stock/daily');
+        const response = await axios.get('/stock/daily');
         if (response.data.success) {
           setDailyData(response.data.data);
           const today = new Date().toLocaleDateString('fr-FR');

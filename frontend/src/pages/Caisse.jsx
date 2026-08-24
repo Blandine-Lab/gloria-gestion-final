@@ -37,7 +37,7 @@ const Caisse = () => {
         start_date: dateRange.start,
         end_date: dateRange.end,
       });
-      const response = await axios.get(`http://localhost:5000/api/cash/transactions?${params.toString()}`);
+      const response = await axios.get(`/cash/transactions?${params.toString()}`);
       if (response.data.success) {
         const data = response.data.data;
         setTransactions(data);
@@ -52,7 +52,7 @@ const Caisse = () => {
         setTotalExpense(expense);
 
         // Récupérer le solde d'ouverture (avant le début de la journée)
-        const openingResponse = await axios.get(`http://localhost:5000/api/cash/transactions?end_date=${dateRange.start}`);
+        const openingResponse = await axios.get(`/cash/transactions?end_date=${dateRange.start}`);
         let opening = 0;
         if (openingResponse.data.success) {
           openingResponse.data.data.forEach(t => {
@@ -82,7 +82,7 @@ const Caisse = () => {
       return;
     }
     try {
-      const response = await axios.post('http://localhost:5000/api/cash/transaction', {
+      const response = await axios.post('/cash/transaction', {
         ...formData,
         amount: parseFloat(formData.amount),
         transaction_date: new Date().toISOString(),

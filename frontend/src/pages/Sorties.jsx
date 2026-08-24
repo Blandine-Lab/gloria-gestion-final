@@ -46,7 +46,7 @@ const Sorties = () => {
       const today = new Date().toISOString().split('T')[0];
       params.append('start_date', today);
 
-      const response = await axios.get(`http://localhost:5000/api/movements?${params.toString()}`);
+      const response = await axios.get(`/movements?${params.toString()}`);
       if (response.data.success) {
         setMovements(response.data.data);
       } else {
@@ -73,7 +73,7 @@ const Sorties = () => {
     setMessage({ text: '', type: '' });
 
     try {
-      const response = await axios.post('http://localhost:5000/api/movement', {
+      const response = await axios.post('/movement', {
         product_id: selectedProduct,
         quantity: parseInt(quantity),
         movement_type: movementType,

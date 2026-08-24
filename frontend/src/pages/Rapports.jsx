@@ -27,12 +27,12 @@ const Rapports = () => {
       setLoading(true);
       setError(null);
 
-      const statsRes = await axios.get('http://localhost:5000/api/dashboard/stats');
+      const statsRes = await axios.get('/dashboard/stats');
       if (statsRes.data.success) {
         setDashboardData(statsRes.data.data);
       }
 
-      const stockRes = await axios.get('http://localhost:5000/api/stock/daily');
+      const stockRes = await axios.get('/stock/daily');
       if (stockRes.data.success) {
         setDailyStock(stockRes.data.data);
       }
@@ -41,7 +41,7 @@ const Rapports = () => {
         start_date: dateRange.start,
         end_date: dateRange.end,
       });
-      const movesRes = await axios.get(`http://localhost:5000/api/movements?${params.toString()}`);
+      const movesRes = await axios.get(`/movements?${params.toString()}`);
       if (movesRes.data.success) {
         setMovements(movesRes.data.data);
         const productMap = {};
