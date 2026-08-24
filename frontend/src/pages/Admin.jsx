@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../utils/supabaseClient';
 import axios from 'axios';
 
-// Liste des modules disponibles (correspond aux onglets de la navbar)
+
+import api from '../services/api';// Liste des modules disponibles (correspond aux onglets de la navbar)
 const MODULES = [
   { key: 'dashboard', label: 'Tableau de bord' },
   { key: 'stocks', label: 'Gestion des stocks' },
@@ -125,7 +126,7 @@ const Admin = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await axios.get('/api/users');
+      const response = await api.get('/api/users');
       if (response.data.success) {
         setUsers(response.data.data);
       }
@@ -436,9 +437,9 @@ const Admin = () => {
     try {
       let response;
       if (editingUser) {
-        response = await axios.put(`/users/${editingUser.id}`, userForm);
+        response = await api.put(`/users/${editingUser.id}`, userForm);
       } else {
-        response = await axios.post('/api/users', userForm);
+        response = await api.post('/api/users', userForm);
       }
       if (response.data.success) {
         closeUserModal();
@@ -458,7 +459,7 @@ const Admin = () => {
   const deleteUser = async (id) => {
     if (!confirm('Supprimer cet utilisateur définitivement ?')) return;
     try {
-      await axios.delete(`/users/${id}`);
+      await api.delete(`/users/${id}`);
       fetchUsers();
       setMessage({ text: '✅ Utilisateur supprimé', type: 'success' });
     } catch (error) {

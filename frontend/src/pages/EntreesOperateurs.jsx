@@ -3,7 +3,8 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { supabase } from '../utils/supabaseClient';
 
-const EntreesOperateurs = () => {
+
+import api from '../services/api';const EntreesOperateurs = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const operatorIdFromUrl = searchParams.get('operator_id');
@@ -48,7 +49,7 @@ const EntreesOperateurs = () => {
     setMessage({ text: '', type: '' });
 
     try {
-      const response = await axios.post('/operator/stock/add', {
+      const response = await api.post('/operator/stock/add', {
         operator_id: selectedOperator,
         type: type,
         quantity: parseInt(quantity)

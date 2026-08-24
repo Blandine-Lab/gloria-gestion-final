@@ -5,7 +5,8 @@ import { supabase } from '../utils/supabaseClient';
 import { db } from '../utils/db';
 import { syncAllData } from '../utils/sync';
 
-const Stocks = () => {
+
+import api from '../services/api';const Stocks = () => {
   const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -49,7 +50,7 @@ const Stocks = () => {
         await syncAllData(); // Cette fonction met à jour toutes les tables
 
         // Récupérer les produits mis à jour depuis Supabase
-        const response = await axios.get('/dashboard/stats');
+        const response = await api.get('/dashboard/stats');
         if (response.data.success) {
           const productsData = response.data.data.products || [];
           // Mettre à jour la base locale
@@ -95,7 +96,7 @@ const Stocks = () => {
       // Mais le suivi journalier est calculé côté serveur, donc on le récupère via API
       // Si hors ligne, on affiche un message
       if (isOnline) {
-        const response = await axios.get('/stock/daily');
+        const response = await api.get('/stock/daily');
         if (response.data.success) {
           setDailyData(response.data.data);
           const today = new Date().toLocaleDateString('fr-FR');

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 
-const Dashboard = () => {
+
+import api from '../services/api';const Dashboard = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -14,7 +15,7 @@ const Dashboard = () => {
 
   const fetchStats = async () => {
     try {
-      const response = await axios.get('/dashboard/stats');
+      const response = await api.get('/dashboard/stats');
       if (response.data.success) {
         setData(response.data.data);
         setError(null);

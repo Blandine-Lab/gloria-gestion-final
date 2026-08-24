@@ -3,7 +3,8 @@ import axios from 'axios';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-const Sauvegarde = () => {
+
+import api from '../services/api';const Sauvegarde = () => {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [exportType, setExportType] = useState('daily');
@@ -12,12 +13,12 @@ const Sauvegarde = () => {
     setLoading(true);
     setMessage(null);
     try {
-      const statsRes = await axios.get('/dashboard/stats');
+      const statsRes = await api.get('/dashboard/stats');
       const stats = statsRes.data.data;
       const today = new Date().toISOString().split('T')[0];
-      const movesRes = await axios.get(`/movements?start_date=${today}&end_date=${today}`);
+      const movesRes = await api.get(`/movements?start_date=${today}&end_date=${today}`);
       const movements = movesRes.data.data || [];
-      const stockRes = await axios.get('/stock/daily');
+      const stockRes = await api.get('/stock/daily');
       const stockData = stockRes.data.data || [];
 
       const doc = new jsPDF('landscape', 'mm', 'a4');
@@ -181,7 +182,7 @@ const Sauvegarde = () => {
   const exportCSV = async () => {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const movesRes = await axios.get(`/movements?start_date=${today}&end_date=${today}`);
+      const movesRes = await api.get(`/movements?start_date=${today}&end_date=${today}`);
       const movements = movesRes.data.data || [];
 
       let csvContent = 'Type,Produit,Cooperant,Quantite,Date\n';
@@ -287,7 +288,7 @@ const Sauvegarde = () => {
           <button
             onClick={async () => {
               try {
-                const response = await axios.get('/dashboard/stats');
+                const response = await api.get('/dashboard/stats');
                 const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');

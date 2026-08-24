@@ -3,7 +3,8 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
-const Caisse = () => {
+
+import api from '../services/api';const Caisse = () => {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -37,7 +38,7 @@ const Caisse = () => {
         start_date: dateRange.start,
         end_date: dateRange.end,
       });
-      const response = await axios.get(`/cash/transactions?${params.toString()}`);
+      const response = await api.get(`/cash/transactions?${params.toString()}`);
       if (response.data.success) {
         const data = response.data.data;
         setTransactions(data);
@@ -52,7 +53,7 @@ const Caisse = () => {
         setTotalExpense(expense);
 
         // Récupérer le solde d'ouverture (avant le début de la journée)
-        const openingResponse = await axios.get(`/cash/transactions?end_date=${dateRange.start}`);
+        const openingResponse = await api.get(`/cash/transactions?end_date=${dateRange.start}`);
         let opening = 0;
         if (openingResponse.data.success) {
           openingResponse.data.data.forEach(t => {
@@ -82,7 +83,7 @@ const Caisse = () => {
       return;
     }
     try {
-      const response = await axios.post('/cash/transaction', {
+      const response = await api.post('/cash/transaction', {
         ...formData,
         amount: parseFloat(formData.amount),
         transaction_date: new Date().toISOString(),

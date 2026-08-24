@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { supabase } from '../utils/supabaseClient';
 
-// Fonction pour obtenir le nom court (sans "Money" / "M-Pesa") pour les mégas/unités
+
+import api from '../services/api';// Fonction pour obtenir le nom court (sans "Money" / "M-Pesa") pour les mégas/unités
 const getShortName = (fullName) => {
   const map = {
     'Vodacom M-Pesa': 'Vodacom',
@@ -150,7 +151,7 @@ const OperatorSales = () => {
         setStock(prev => ({ ...prev, [field]: newStock }));
       }
 
-      const response = await axios.post('/api/sale', saleData);
+      const response = await api.post('/api/sale', saleData);
 
       if (response.data.success) {
         setMessage({ text: '✅ Transaction enregistrée avec succès !', type: 'success' });

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { supabase } from '../utils/supabaseClient';
 
-const Sorties = () => {
+
+import api from '../services/api';const Sorties = () => {
   const [products, setProducts] = useState([]);
   const [sellers, setSellers] = useState([]);
   const [movements, setMovements] = useState([]);
@@ -46,7 +47,7 @@ const Sorties = () => {
       const today = new Date().toISOString().split('T')[0];
       params.append('start_date', today);
 
-      const response = await axios.get(`/movements?${params.toString()}`);
+      const response = await api.get(`/movements?${params.toString()}`);
       if (response.data.success) {
         setMovements(response.data.data);
       } else {
@@ -73,7 +74,7 @@ const Sorties = () => {
     setMessage({ text: '', type: '' });
 
     try {
-      const response = await axios.post('/movement', {
+      const response = await api.post('/movement', {
         product_id: selectedProduct,
         quantity: parseInt(quantity),
         movement_type: movementType,

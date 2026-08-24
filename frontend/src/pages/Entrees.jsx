@@ -3,7 +3,8 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { supabase } from '../utils/supabaseClient';
 
-const Entrees = () => {
+
+import api from '../services/api';const Entrees = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const productIdFromUrl = searchParams.get('product_id');
@@ -50,7 +51,7 @@ const Entrees = () => {
 
     try {
       // Appel au backend pour enregistrer un mouvement de type 'supplier_in'
-      const response = await axios.post('/movement', {
+      const response = await api.post('/movement', {
         product_id: selectedProduct,
         quantity: totalBottles,
         movement_type: 'supplier_in',

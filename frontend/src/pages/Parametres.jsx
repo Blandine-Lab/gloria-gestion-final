@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 
-const Parametres = () => {
+
+import api from '../services/api';const Parametres = () => {
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -15,7 +16,7 @@ const Parametres = () => {
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/api/settings');
+      const response = await api.get('/api/settings');
       if (response.data.success) {
         const settingsObj = {};
         response.data.data.forEach(s => {
@@ -44,7 +45,7 @@ const Parametres = () => {
     setSuccess(false);
     try {
       for (const [key, value] of Object.entries(settings)) {
-        await axios.put(`/settings/${key}`, { value });
+        await api.put(`/settings/${key}`, { value });
       }
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);

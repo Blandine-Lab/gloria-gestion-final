@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { supabase } from '../utils/supabaseClient';
 
-const Rapports = () => {
+
+import api from '../services/api';const Rapports = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [period, setPeriod] = useState('daily'); // daily, weekly, monthly
@@ -27,12 +28,12 @@ const Rapports = () => {
       setLoading(true);
       setError(null);
 
-      const statsRes = await axios.get('/dashboard/stats');
+      const statsRes = await api.get('/dashboard/stats');
       if (statsRes.data.success) {
         setDashboardData(statsRes.data.data);
       }
 
-      const stockRes = await axios.get('/stock/daily');
+      const stockRes = await api.get('/stock/daily');
       if (stockRes.data.success) {
         setDailyStock(stockRes.data.data);
       }
@@ -41,7 +42,7 @@ const Rapports = () => {
         start_date: dateRange.start,
         end_date: dateRange.end,
       });
-      const movesRes = await axios.get(`/movements?${params.toString()}`);
+      const movesRes = await api.get(`/movements?${params.toString()}`);
       if (movesRes.data.success) {
         setMovements(movesRes.data.data);
         const productMap = {};

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 
-const Utilisateurs = () => {
+
+import api from '../services/api';const Utilisateurs = () => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -22,7 +23,7 @@ const Utilisateurs = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/api/users');
+      const response = await api.get('/api/users');
       if (response.data.success) {
         setUsers(response.data.data);
         setError(null);
@@ -83,9 +84,9 @@ const Utilisateurs = () => {
     try {
       let response;
       if (editingUser) {
-        response = await axios.put(`/users/${editingUser.id}`, formData);
+        response = await api.put(`/users/${editingUser.id}`, formData);
       } else {
-        response = await axios.post('/api/users', formData);
+        response = await api.post('/api/users', formData);
       }
       if (response.data.success) {
         closeModal();
@@ -102,7 +103,7 @@ const Utilisateurs = () => {
   const deleteUser = async (id) => {
     if (!window.confirm('Supprimer cet utilisateur définitivement ?')) return;
     try {
-      await axios.delete(`/users/${id}`);
+      await api.delete(`/users/${id}`);
       fetchUsers();
     } catch (err) {
       console.error(err);
