@@ -12,6 +12,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Route de test pour vérifier que le backend répond
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'Backend OK' });
+});
+
+console.log('🔍 Démarrage du backend...');
+console.log('🔑 VITE_SUPABASE_URL:', process.env.VITE_SUPABASE_URL ? 'défini' : 'NON DÉFINI');
+console.log('🔑 SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'défini' : 'NON DÉFINI');
+console.log('🔑 JWT_SECRET:', process.env.JWT_SECRET ? 'défini' : 'NON DÉFINI');
+
 // Client Supabase avec transport WebSocket
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
