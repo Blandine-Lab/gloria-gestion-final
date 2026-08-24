@@ -1,8 +1,8 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 
-// URL du backend en dur (temporaire pour test)
-const API_URL = 'https://gloria-gestion-final-backend.vercel.app/api';
+// URL du backend Render (remplace l’ancienne Vercel)
+const API_URL = 'https://gloria-gestion-final.onrender.com/api';
 
 const AuthContext = createContext();
 
