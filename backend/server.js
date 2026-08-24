@@ -4,8 +4,7 @@ import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import serverless from 'serverless-http';
-import WebSocket from 'ws'; // <-- Support WebSocket pour Node.js 20
+import WebSocket from 'ws';
 
 dotenv.config();
 
@@ -790,9 +789,9 @@ app.get('/api/auth/me', async (req, res) => {
 });
 
 // =============================================
-// ✅ EXPORT POUR VERCEL (serverless)
+// ✅ EXPORT POUR VERCEL (Express natif)
 // =============================================
-export default serverless(app);
+export default app;
 
 // Pour le développement local
 if (process.env.NODE_ENV !== 'production') {
