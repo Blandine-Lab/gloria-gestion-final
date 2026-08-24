@@ -1,15 +1,15 @@
 import { supabase } from '../utils/supabaseClient';
-import db from '../db'; // ✅ correction : import par défaut
+import db from '../db';
 
-// Mapping des tables locales -> noms Supabase
+// Mapping des tables locales (camelCase) -> noms Supabase (snake_case)
 const TABLE_MAP = {
   products: 'products',
   sellers: 'sellers',
   clients: 'clients',
   operators: 'operators',
-  stock_movements: 'stock_movements',
+  stockMovements: 'stock_movements',   // local camelCase → Supabase snake_case
   sales: 'sales',
-  cash_transactions: 'cash_transactions',
+  cashTransactions: 'cash_transactions',
   settings: 'settings',
   users: 'users'
 };
@@ -20,13 +20,13 @@ export const syncFromServer = async () => {
   try {
     const tables = Object.keys(TABLE_MAP);
     const results = await Promise.all(
-      tables.map(async (table) => {
-        const supabaseTable = TABLE_MAP[table];
+      tables.map(async (localTable) => {
+        const supabaseTable = TABLE_MAP[localTable];
         const { data, error } = await supabase
           .from(supabaseTable)
           .select('*');
         if (error) throw error;
-        return { table, data: data || [] };
+        return { localTable, data: data || [] };
       })
     );
 
@@ -35,18 +35,18 @@ export const syncFromServer = async () => {
     await db.sellers.clear();
     await db.clients.clear();
     await db.operators.clear();
-    await db.stock_movements.clear();
+    await db.stockMovements.clear();   // camelCase
     await db.sales.clear();
-    await db.cash_transactions.clear();
+    await db.cashTransactions.clear(); // camelCase
     await db.settings.clear();
     await db.users.clear();
 
     // Insérer les nouvelles données
-    for (const { table, data } of results) {
+    for (const { localTable, data } of results) {
       if (data.length > 0) {
-        await db[table].bulkPut(data);
+        await db[localTable].bulkPut(data); // localTable est camelCase
       }
-      console.log(`✅ Table ${table} synchronisée (${data.length} lignes)`);
+      console.log(`✅ Table ${localTable} synchronisée (${data.length} lignes)`);
     }
 
     console.log('✅ Synchronisation terminée');
@@ -58,17 +58,16 @@ export const syncFromServer = async () => {
 };
 
 // Ajouter une opération à la file d'attente (pour les écritures hors ligne)
-export const addToSyncQueue = async (action, table, data) => {
+export const addToSyncQueue = async (action, localTable, data) => {
   try {
-    // Vérifier que la table sync_queue existe (création si nécessaire)
-    if (!db.tables.some(t => t.name === 'sync_queue')) {
-      // Créer la table dynamiquement (Dexie le permet)
-      db.version(db.verno + 1).stores({ sync_queue: '++id, synced' });
+    // Vérifier que la table syncQueue existe
+    if (!db.tables.some(t => t.name === 'syncQueue')) {
+      db.version(db.verno + 1).stores({ syncQueue: '++id, synced' });
       await db.open();
     }
-    await db.sync_queue.add({
-      action, // 'insert', 'update', 'delete'
-      table,
+    await db.syncQueue.add({
+      action,
+      table: localTable, // stocké en camelCase
       data,
       timestamp: new Date().toISOString(),
       synced: false,
@@ -83,13 +82,12 @@ export const addToSyncQueue = async (action, table, data) => {
 // Traiter la file d'attente (quand la connexion revient)
 export const processSyncQueue = async () => {
   try {
-    // Vérifier si la table sync_queue existe
-    if (!db.tables.some(t => t.name === 'sync_queue')) {
+    if (!db.tables.some(t => t.name === 'syncQueue')) {
       console.log('📭 Aucune file d\'attente trouvée.');
       return { success: true, count: 0 };
     }
 
-    const pendingItems = await db.sync_queue.where('synced').equals(false).toArray();
+    const pendingItems = await db.syncQueue.where('synced').equals(false).toArray();
     if (pendingItems.length === 0) return { success: true, count: 0 };
 
     console.log(`🔄 Traitement de ${pendingItems.length} éléments en attente...`);
@@ -127,8 +125,7 @@ export const processSyncQueue = async () => {
         }
         if (response.error) throw response.error;
 
-        // Marquer comme synchronisé
-        await db.sync_queue.update(item.id, { synced: true });
+        await db.syncQueue.update(item.id, { synced: true });
         successCount++;
         console.log(`✅ Item ${item.id} synchronisé (${item.action} sur ${item.table})`);
       } catch (error) {
@@ -136,8 +133,7 @@ export const processSyncQueue = async () => {
       }
     }
 
-    // Supprimer les éléments synchronisés
-    await db.sync_queue.where('synced').equals(true).delete();
+    await db.syncQueue.where('synced').equals(true).delete();
 
     return { success: true, count: successCount };
   } catch (error) {
@@ -159,5 +155,4 @@ export const checkAndSync = async () => {
   }
 };
 
-// Exporter également un alias pour la rétrocompatibilité
 export const syncAll = checkAndSync;
