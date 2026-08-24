@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import { supabase } from '../utils/supabaseClient';
+import api from '../services/api';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';// Fonction pour obtenir le nom court (sans "Money" / "M-Pesa") pour les mégas/unités
+// Fonction pour obtenir le nom court (sans "Money" / "M-Pesa") pour les mégas/unités
 const getShortName = (fullName) => {
   const map = {
     'Vodacom M-Pesa': 'Vodacom',
@@ -46,47 +46,34 @@ const OperatorSales = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const { data: op, error: opError } = await supabase
-        .from('operators')
-        .select('*')
-        .eq('id', id)
-        .single();
-      if (opError) throw opError;
+
+      // 1. Charger l'opérateur depuis Dexie
+      const op = await db.operators.get(id);
+      if (!op) {
+        throw new Error('Opérateur introuvable');
+      }
       setOperator(op);
       setStock({ stock_megas: op.stock_megas || 0, stock_unites: op.stock_unites || 0 });
 
-      const { data: clientsData, error: clientsError } = await supabase
-        .from('clients')
-        .select('id, name')
-        .order('name');
-      if (clientsError) throw clientsError;
+      // 2. Charger les clients depuis Dexie
+      const clientsData = await db.clients.toArray();
       setClients(clientsData || []);
 
-      const today = new Date().toISOString().split('T')[0];
-      const { data: salesData, error: salesError } = await supabase
-        .from('sales')
-        .select(`
-          id,
-          total_amount,
-          payment_method,
-          sale_date,
-          note,
-          sale_type,
-          operation_type,
-          phone_number,
-          beneficiary_phone,
-          beneficiary_name,
-          confirmation_code,
-          clients(name),
-          operator_id
-        `)
-        .eq('operator_id', id)
-        .gte('sale_date', `${today}T00:00:00`)
-        .lte('sale_date', `${today}T23:59:59`)
-        .order('sale_date', { ascending: false });
-      if (salesError) throw salesError;
-      setSales(salesData || []);
+      // 3. Charger les ventes du jour depuis Dexie (table sales)
+      const today = new Date();
+      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
 
+      const allSales = await db.sales.toArray();
+      const filteredSales = allSales.filter(s => {
+        const saleDate = new Date(s.sale_date);
+        return saleDate >= startOfDay && saleDate < endOfDay && s.operator_id === id;
+      });
+      // Trier par date décroissante
+      filteredSales.sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date));
+      setSales(filteredSales);
+
+      setMessage({ text: '', type: '' });
     } catch (error) {
       console.error('Erreur chargement:', error);
       setMessage({ text: 'Erreur de chargement des données', type: 'error' });
@@ -137,20 +124,32 @@ const OperatorSales = () => {
         saleData.confirmation_code = formData.confirmation_code;
       } else {
         const unitPrice = 500;
-        saleData.total_amount = parseInt(formData.quantity) * unitPrice;
-        saleData.quantity = parseInt(formData.quantity);
+        const quantity = parseInt(formData.quantity);
+        saleData.total_amount = quantity * unitPrice;
+        saleData.quantity = quantity; // ajouté pour la trace
         const field = activeTab === 'megas' ? 'stock_megas' : 'stock_unites';
         const currentStock = stock[field];
-        if (currentStock < parseInt(formData.quantity)) {
+        if (currentStock < quantity) {
           setMessage({ text: 'Stock insuffisant', type: 'error' });
           setSaving(false);
           return;
         }
-        const newStock = currentStock - parseInt(formData.quantity);
-        await supabase.from('operators').update({ [field]: newStock }).eq('id', id);
+        // Mettre à jour le stock via l'API (route pour retirer du stock opérateur)
+        const stockUpdateResponse = await api.post('/api/stock/operator', {
+          operator_id: id,
+          type: activeTab === 'megas' ? 'mega' : 'unite',
+          quantity: quantity,
+          operation: 'remove'
+        });
+        if (!stockUpdateResponse.data.success) {
+          throw new Error(stockUpdateResponse.data.error || 'Erreur mise à jour stock');
+        }
+        // Mettre à jour l'état local
+        const newStock = currentStock - quantity;
         setStock(prev => ({ ...prev, [field]: newStock }));
       }
 
+      // Enregistrer la vente via l'API
       const response = await api.post('/api/sale', saleData);
 
       if (response.data.success) {
@@ -167,36 +166,16 @@ const OperatorSales = () => {
           beneficiary_name: '',
           confirmation_code: ''
         });
-        // Recharger les ventes
-        const today = new Date().toISOString().split('T')[0];
-        const { data: salesData } = await supabase
-          .from('sales')
-          .select(`
-            id,
-            total_amount,
-            payment_method,
-            sale_date,
-            note,
-            sale_type,
-            operation_type,
-            phone_number,
-            beneficiary_phone,
-            beneficiary_name,
-            confirmation_code,
-            clients(name),
-            operator_id
-          `)
-          .eq('operator_id', id)
-          .gte('sale_date', `${today}T00:00:00`)
-          .lte('sale_date', `${today}T23:59:59`)
-          .order('sale_date', { ascending: false });
-        setSales(salesData || []);
+        // Synchroniser Dexie en arrière-plan
+        await syncAll();
+        // Recharger les données locales (pour mettre à jour la liste des ventes et le stock)
+        await fetchData();
       } else {
         setMessage({ text: response.data.error || 'Erreur lors de l\'enregistrement', type: 'error' });
       }
     } catch (error) {
       console.error(error);
-      setMessage({ text: '❌ Erreur serveur', type: 'error' });
+      setMessage({ text: error.message || '❌ Erreur serveur', type: 'error' });
     } finally {
       setSaving(false);
     }
@@ -211,8 +190,6 @@ const OperatorSales = () => {
   if (!operator) return <div>Opérateur non trouvé</div>;
 
   const totalSales = sales.reduce((sum, s) => sum + s.total_amount, 0);
-
-  // Déterminer le nom à afficher dans le titre selon l'onglet
   const displayName = activeTab === 'emoney' ? operator.name : getShortName(operator.name);
 
   return (

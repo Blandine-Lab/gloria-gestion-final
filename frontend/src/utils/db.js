@@ -10,7 +10,8 @@ db.version(1).stores({
   sales: 'id, sale_date, total_amount, payment_method, operator_id, client_id, sale_type',
   stock_movements: 'id, product_id, quantity_change, movement_type, cooperant_id, created_at',
   cash_transactions: 'id, transaction_date, type, category, amount, payment_method',
-  settings: 'key, value'
+  settings: 'key, value',
+  users: 'id, email, full_name, role, active'   // ✅ Ajout de la table users
 });
 
 // Fonction pour vider toutes les tables
@@ -23,11 +24,12 @@ export const clearAll = async () => {
   await db.stock_movements.clear();
   await db.cash_transactions.clear();
   await db.settings.clear();
+  await db.users.clear();   // ✅ Ajout
 };
 
 // Fonction pour remplir toutes les tables depuis Supabase
 export const populateDatabase = async (data) => {
-  const { products, sellers, operators, clients, sales, stock_movements, cash_transactions, settings } = data;
+  const { products, sellers, operators, clients, sales, stock_movements, cash_transactions, settings, users } = data;
   if (products) await db.products.bulkPut(products);
   if (sellers) await db.sellers.bulkPut(sellers);
   if (operators) await db.operators.bulkPut(operators);
@@ -36,4 +38,5 @@ export const populateDatabase = async (data) => {
   if (stock_movements) await db.stock_movements.bulkPut(stock_movements);
   if (cash_transactions) await db.cash_transactions.bulkPut(cash_transactions);
   if (settings) await db.settings.bulkPut(settings);
+  if (users) await db.users.bulkPut(users);
 };

@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import axios from 'axios';
-import { supabase } from '../utils/supabaseClient';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';const Rapports = () => {
+const Rapports = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [period, setPeriod] = useState('daily'); // daily, weekly, monthly
+  const [period, setPeriod] = useState('daily');
   const [dateRange, setDateRange] = useState({
     start: new Date().toISOString().split('T')[0],
     end: new Date().toISOString().split('T')[0],
@@ -28,72 +27,231 @@ import api from '../services/api';const Rapports = () => {
       setLoading(true);
       setError(null);
 
-      const statsRes = await api.get('/dashboard/stats');
-      if (statsRes.data.success) {
-        setDashboardData(statsRes.data.data);
-      }
+      // 1. Récupérer les données depuis Dexie
+      const [products, stockMovements, sales, sellers, operators] = await Promise.all([
+        db.products.toArray(),
+        db.stockMovements.toArray(),
+        db.sales.toArray(),
+        db.sellers.toArray(),
+        db.operators.toArray(),
+      ]);
 
-      const stockRes = await api.get('/stock/daily');
-      if (stockRes.data.success) {
-        setDailyStock(stockRes.data.data);
-      }
+      const startDate = new Date(dateRange.start);
+      const endDate = new Date(dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
 
-      const params = new URLSearchParams({
-        start_date: dateRange.start,
-        end_date: dateRange.end,
+      // Filtrer les mouvements sur la période
+      const periodMovements = stockMovements.filter(m => {
+        const d = new Date(m.created_at);
+        return d >= startDate && d <= endDate;
       });
-      const movesRes = await api.get(`/movements?${params.toString()}`);
-      if (movesRes.data.success) {
-        setMovements(movesRes.data.data);
-        const productMap = {};
-        movesRes.data.data.forEach(m => {
-          if (m.movement_type === 'cooperant_take' || m.movement_type === 'retail_sale') {
-            const pid = m.product_id;
-            const qty = Math.abs(m.quantity_change);
-            if (!productMap[pid]) {
-              productMap[pid] = { name: m.product?.name || 'Inconnu', qty: 0, amount: 0 };
-            }
-            productMap[pid].qty += qty;
-            productMap[pid].amount += qty * (m.product?.unit_price || 0);
-          }
-        });
-        setProductSales(Object.values(productMap).sort((a, b) => b.qty - a.qty));
 
-        const salesRes = await supabase
-          .from('sales')
-          .select('total_amount, operator_id, operators(name)')
-          .gte('sale_date', `${dateRange.start}T00:00:00`)
-          .lte('sale_date', `${dateRange.end}T23:59:59`);
-        if (!salesRes.error) {
-          const opSales = {};
-          salesRes.data.forEach(s => {
-            const name = s.operators?.name || 'Autre';
-            opSales[name] = (opSales[name] || 0) + s.total_amount;
-          });
-          setOperatorSales(Object.entries(opSales).map(([name, amount]) => ({ name, amount })));
+      // 2. Reconstituer les données du dashboard (similaire à Dashboard.jsx)
+      // Calcul des ventes de jus (cooperant_take, cooperant_return, retail_sale)
+      const cooperantMap = {};
+      const productNetMap = {};
+      let totalRetail = 0;
+      let totalRetailAmount = 0;
+
+      periodMovements.forEach(mov => {
+        const product = products.find(p => p.id === mov.product_id) || {};
+        const unitPrice = product.unit_price || 0;
+        const absQty = Math.abs(mov.quantity_change);
+        const productId = mov.product_id;
+        const cooperantId = mov.cooperant_id;
+
+        if (mov.movement_type === 'cooperant_take') {
+          if (!cooperantMap[cooperantId]) {
+            cooperantMap[cooperantId] = { totalTake: 0, totalReturn: 0 };
+          }
+          cooperantMap[cooperantId].totalTake += absQty;
+          const key = `${cooperantId}|${productId}`;
+          if (!productNetMap[key]) {
+            productNetMap[key] = { cooperantId, productId, unitPrice, netQty: 0 };
+          }
+          productNetMap[key].netQty += absQty;
+        } else if (mov.movement_type === 'cooperant_return') {
+          if (!cooperantMap[cooperantId]) {
+            cooperantMap[cooperantId] = { totalTake: 0, totalReturn: 0 };
+          }
+          cooperantMap[cooperantId].totalReturn += absQty;
+          const key = `${cooperantId}|${productId}`;
+          if (!productNetMap[key]) {
+            productNetMap[key] = { cooperantId, productId, unitPrice, netQty: 0 };
+          }
+          productNetMap[key].netQty -= absQty;
+        } else if (mov.movement_type === 'retail_sale') {
+          totalRetail += absQty;
+          totalRetailAmount += absQty * unitPrice;
         }
+      });
 
-        const coopMap = {};
-        movesRes.data.data.forEach(m => {
-          if (m.movement_type === 'cooperant_take' || m.movement_type === 'cooperant_return') {
-            const cid = m.cooperant_id;
-            if (!cid) return;
-            if (!coopMap[cid]) {
-              coopMap[cid] = { name: m.cooperant?.name || 'Inconnu', take: 0, ret: 0 };
-            }
-            const qty = Math.abs(m.quantity_change);
-            if (m.movement_type === 'cooperant_take') coopMap[cid].take += qty;
-            else coopMap[cid].ret += qty;
-          }
-        });
-        setCooperantSummary(Object.values(coopMap).map(c => ({
-          ...c,
-          net: c.take - c.ret,
-        })).sort((a, b) => b.net - a.net));
+      const cooperantAmounts = {};
+      for (const key in productNetMap) {
+        const data = productNetMap[key];
+        const amount = data.netQty * data.unitPrice;
+        if (!cooperantAmounts[data.cooperantId]) cooperantAmounts[data.cooperantId] = 0;
+        cooperantAmounts[data.cooperantId] += amount;
       }
+
+      let totalCooperantNet = 0;
+      let totalCooperantAmount = 0;
+      const cooperantSalesList = [];
+      for (const [cooperantId, data] of Object.entries(cooperantMap)) {
+        const netSold = data.totalTake - data.totalReturn;
+        if (netSold > 0) {
+          totalCooperantNet += netSold;
+          const amount = cooperantAmounts[cooperantId] || 0;
+          totalCooperantAmount += amount;
+          const seller = sellers.find(s => s.id === cooperantId);
+          cooperantSalesList.push({
+            cooperantId,
+            name: seller?.name || 'Inconnu',
+            netSold,
+            amount: amount
+          });
+        }
+      }
+
+      // Ventes de crédits (emoney, mégas, unités)
+      const periodSales = sales.filter(s => {
+        const d = new Date(s.sale_date);
+        return d >= startDate && d <= endDate;
+      });
+
+      let totalEMoney = 0, totalMegas = 0, totalUnites = 0;
+      const operatorStats = {};
+      const typeStats = { megas: 0, unites: 0, emoney: 0 };
+
+      periodSales.forEach(sale => {
+        const amount = sale.total_amount;
+        const opName = operators.find(o => o.id === sale.operator_id)?.name || 'Autre';
+        const type = sale.sale_type || 'emoney';
+
+        if (type === 'megas') totalMegas += amount;
+        else if (type === 'unites') totalUnites += amount;
+        else totalEMoney += amount;
+
+        typeStats[type] = (typeStats[type] || 0) + amount;
+        operatorStats[opName] = (operatorStats[opName] || 0) + amount;
+      });
+
+      // Stocks
+      const totalStockBottles = products.reduce((sum, p) => sum + (p.current_stock || 0), 0);
+      const totalStockPackets = products.reduce((sum, p) => {
+        const perPack = p.bottles_per_pack || 12;
+        return sum + Math.floor((p.current_stock || 0) / perPack);
+      }, 0);
+
+      // Alertes
+      const alerts = products.filter(p => p.current_stock <= p.reorder_level);
+
+      const totalJuiceSold = totalCooperantNet + totalRetail;
+      const totalJuiceAmount = totalCooperantAmount + totalRetailAmount;
+
+      setDashboardData({
+        totalJuiceSold,
+        totalCooperantNet,
+        totalRetail,
+        totalEMoney,
+        totalMegas,
+        totalUnites,
+        typeStats,
+        totalJuiceAmount,
+        totalStockBottles,
+        totalStockPackets,
+        cooperantSales: cooperantSalesList.sort((a, b) => b.netSold - a.netSold),
+        operatorStats,
+        alerts: alerts || [],
+        products: products || [],
+        date: startDate.toISOString().split('T')[0]
+      });
+
+      // 3. Stock journalier (similaire à /api/stock/daily)
+      // Calcul des entrées/sorties par produit sur la période
+      const productStats = {};
+      products.forEach(p => {
+        productStats[p.id] = {
+          id: p.id,
+          name: p.name,
+          current_stock: p.current_stock,
+          reorder_level: p.reorder_level,
+          size: p.size,
+          bottles_per_pack: p.bottles_per_pack || 12,
+          entries: 0,
+          exits: 0,
+          initialStock: 0,
+          finalStock: p.current_stock,
+        };
+      });
+
+      periodMovements.forEach(m => {
+        const pid = m.product_id;
+        if (!productStats[pid]) return;
+        const qty = Math.abs(m.quantity_change);
+        const type = m.movement_type;
+        if (type === 'supplier_in' || type === 'cooperant_return') {
+          productStats[pid].entries += qty;
+        } else if (type === 'cooperant_take' || type === 'retail_sale') {
+          productStats[pid].exits += qty;
+        }
+      });
+
+      const dailyStockResult = Object.values(productStats).map(p => {
+        const initialStock = p.current_stock - p.entries + p.exits;
+        return {
+          ...p,
+          initialStock: Math.max(initialStock, 0),
+          finalStock: p.current_stock,
+        };
+      });
+      setDailyStock(dailyStockResult);
+
+      // 4. Mouvements (pour affichage)
+      setMovements(periodMovements);
+
+      // 5. Ventes par produit
+      const productMap = {};
+      periodMovements.forEach(m => {
+        if (m.movement_type === 'cooperant_take' || m.movement_type === 'retail_sale') {
+          const pid = m.product_id;
+          const qty = Math.abs(m.quantity_change);
+          if (!productMap[pid]) {
+            productMap[pid] = { name: products.find(p => p.id === pid)?.name || 'Inconnu', qty: 0, amount: 0 };
+          }
+          productMap[pid].qty += qty;
+          const unitPrice = products.find(p => p.id === pid)?.unit_price || 0;
+          productMap[pid].amount += qty * unitPrice;
+        }
+      });
+      setProductSales(Object.values(productMap).sort((a, b) => b.qty - a.qty));
+
+      // 6. Répartition par opérateur (déjà calculée dans operatorStats)
+      setOperatorSales(Object.entries(operatorStats).map(([name, amount]) => ({ name, amount })));
+
+      // 7. Résumé coopérants (déjà calculé)
+      setCooperantSummary(
+        Object.values(cooperantMap).map((c, idx) => {
+          const seller = sellers.find(s => s.id === idx);
+          return {
+            name: seller?.name || 'Inconnu',
+            take: c.totalTake,
+            ret: c.totalReturn,
+            net: c.totalTake - c.totalReturn,
+          };
+        }).filter(c => c.net > 0).sort((a, b) => b.net - a.net)
+      );
+
+      setError(null);
+
+      // Synchronisation en arrière-plan si connecté
+      if (navigator.onLine) {
+        await syncAll(); // rafraîchir les données en arrière-plan
+      }
+
     } catch (err) {
       console.error(err);
-      setError('Erreur de chargement des données');
+      setError('Erreur de chargement des données locales');
     } finally {
       setLoading(false);
     }
@@ -154,7 +312,6 @@ import api from '../services/api';const Rapports = () => {
 
   return (
     <div style={{ padding: '2rem', paddingTop: '100px', maxWidth: '1200px', margin: '0 auto' }}>
-      {/* En-tête avec espacement corrigé */}
       <div style={{ marginBottom: '2rem' }}>
         <h1 style={{ color: '#1f2937', fontSize: '2rem', marginBottom: '0.5rem' }}>📊 Rapports & Statistiques</h1>
         <p style={{ color: '#4b5563', fontSize: '1rem', marginTop: '0' }}>
@@ -162,7 +319,6 @@ import api from '../services/api';const Rapports = () => {
         </p>
       </div>
 
-      {/* Période et filtres */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem', alignItems: 'center' }}>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button
@@ -234,7 +390,6 @@ import api from '../services/api';const Rapports = () => {
         </div>
       </div>
 
-      {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
         <div style={{ background: 'white', padding: '1rem', borderRadius: '0.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
           <p style={{ margin: 0, color: '#6b7280', fontSize: '0.8rem' }}>Chiffre d'affaires (FC)</p>
@@ -254,7 +409,6 @@ import api from '../services/api';const Rapports = () => {
         </div>
       </div>
 
-      {/* Deux colonnes : Ventes par produit + Répartition opérateurs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1.5rem', marginBottom: '2rem' }}>
         <div style={{ background: 'white', padding: '1rem', borderRadius: '0.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
           <h3 style={{ marginTop: 0, color: '#1f2937' }}>🧃 Ventes par produit</h3>
@@ -309,7 +463,6 @@ import api from '../services/api';const Rapports = () => {
         </div>
       </div>
 
-      {/* Performances des coopérants */}
       <div style={{ background: 'white', padding: '1rem', borderRadius: '0.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
         <h3 style={{ marginTop: 0, color: '#1f2937' }}>👥 Performances des coopérants</h3>
         {cooperantSummary.length === 0 ? (
@@ -340,7 +493,6 @@ import api from '../services/api';const Rapports = () => {
         )}
       </div>
 
-      {/* Suivi des stocks (détail) */}
       <div style={{ background: 'white', padding: '1rem', borderRadius: '0.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <h3 style={{ marginTop: 0, color: '#1f2937' }}>📦 Suivi des stocks (journalier)</h3>
         {dailyStock.length === 0 ? (

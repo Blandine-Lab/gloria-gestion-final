@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import axios from 'axios';
+import api from '../services/api';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';const Parametres = () => {
+const Parametres = () => {
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -16,20 +17,43 @@ import api from '../services/api';const Parametres = () => {
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/settings');
-      if (response.data.success) {
+      // 1. Lire depuis Dexie (si disponible)
+      const localSettings = await db.settings.toArray();
+      if (localSettings.length > 0) {
         const settingsObj = {};
-        response.data.data.forEach(s => {
+        localSettings.forEach(s => {
           settingsObj[s.key] = s.value;
         });
         setSettings(settingsObj);
         setError(null);
-      } else {
-        setError('Erreur de chargement des paramètres');
+      }
+
+      // 2. Si connecté, rafraîchir depuis le serveur
+      if (navigator.onLine) {
+        const response = await api.get('/settings');
+        if (response.data.success) {
+          const serverSettings = {};
+          response.data.data.forEach(s => {
+            serverSettings[s.key] = s.value;
+          });
+          // Mettre à jour l'état
+          setSettings(serverSettings);
+          // Mettre à jour Dexie
+          await db.settings.clear();
+          await db.settings.bulkPut(
+            Object.entries(serverSettings).map(([key, value]) => ({ key, value }))
+          );
+          setError(null);
+        } else {
+          setError('Erreur de chargement des paramètres (serveur)');
+        }
       }
     } catch (err) {
       console.error(err);
-      setError('Impossible de contacter le serveur');
+      // Si on n'a pas de données locales, on affiche une erreur
+      if (Object.keys(settings).length === 0) {
+        setError('Impossible de charger les paramètres');
+      }
     } finally {
       setLoading(false);
     }
@@ -44,11 +68,26 @@ import api from '../services/api';const Parametres = () => {
     setError(null);
     setSuccess(false);
     try {
-      for (const [key, value] of Object.entries(settings)) {
-        await api.put(`/settings/${key}`, { value });
+      // 1. Sauvegarder localement dans Dexie
+      await db.settings.clear();
+      await db.settings.bulkPut(
+        Object.entries(settings).map(([key, value]) => ({ key, value }))
+      );
+
+      // 2. Si connecté, envoyer au serveur
+      if (navigator.onLine) {
+        for (const [key, value] of Object.entries(settings)) {
+          await api.put(`/settings/${key}`, { value });
+        }
+        // Synchroniser les autres données (au cas où)
+        await syncAll();
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+      } else {
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+        setError('⚠️ Mode hors ligne – les paramètres sont sauvegardés localement, la synchronisation sera effectuée à la prochaine connexion.');
       }
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
       console.error(err);
       setError('Erreur lors de l\'enregistrement des paramètres');

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import { supabase } from '../utils/supabaseClient';
+import api from '../services/api';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';const Entrees = () => {
+const Entrees = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const productIdFromUrl = searchParams.get('product_id');
@@ -12,7 +12,7 @@ import api from '../services/api';const Entrees = () => {
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(productIdFromUrl || '');
   const [packQuantity, setPackQuantity] = useState(1);
-  const [bottleQuantity, setBottleQuantity] = useState(0); // si on ajoute des bouteilles en plus
+  const [bottleQuantity, setBottleQuantity] = useState(0);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ text: '', type: '' });
 
@@ -22,14 +22,10 @@ import api from '../services/api';const Entrees = () => {
 
   const fetchProducts = async () => {
     try {
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .order('name');
-      if (error) throw error;
+      const data = await db.products.toArray();
       setProducts(data || []);
     } catch (error) {
-      console.error('Erreur chargement produits:', error);
+      console.error('Erreur chargement produits depuis Dexie:', error);
       setMessage({ text: 'Erreur de chargement des produits', type: 'error' });
     }
   };
@@ -50,7 +46,6 @@ import api from '../services/api';const Entrees = () => {
     setMessage({ text: '', type: '' });
 
     try {
-      // Appel au backend pour enregistrer un mouvement de type 'supplier_in'
       const response = await api.post('/movement', {
         product_id: selectedProduct,
         quantity: totalBottles,
@@ -63,8 +58,8 @@ import api from '../services/api';const Entrees = () => {
         setMessage({ text: `✅ ${totalBottles} bouteilles ajoutées au stock !`, type: 'success' });
         setPackQuantity(1);
         setBottleQuantity(0);
-        // Recharger la liste des produits pour voir le stock à jour
-        fetchProducts();
+        await syncAll();
+        await fetchProducts();
       } else {
         setMessage({ text: response.data.error || 'Erreur', type: 'error' });
       }
@@ -79,9 +74,7 @@ import api from '../services/api';const Entrees = () => {
   return (
     <div style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
       <h1 style={{ marginBottom: '1.5rem', color: '#1e3a8a' }}>📦 Entrées en stock</h1>
-      <p style={{ marginBottom: '2rem', color: '#6b7280' }}>
-        Ajoutez des quantités à un produit existant.
-      </p>
+      <p style={{ marginBottom: '2rem', color: '#6b7280' }}>Ajoutez des quantités à un produit existant.</p>
 
       <form onSubmit={handleSubmit} style={{ background: 'white', padding: '2rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <div style={{ marginBottom: '1rem' }}>
@@ -95,7 +88,7 @@ import api from '../services/api';const Entrees = () => {
             <option value="">Sélectionner un produit</option>
             {products.map(p => (
               <option key={p.id} value={p.id}>
-                {p.name} (Stock actuel: {p.current_stock} bouteilles)
+                {p.name} (Stock actuel: {p.current_stock || 0} bouteilles)
               </option>
             ))}
           </select>
@@ -117,7 +110,7 @@ import api from '../services/api';const Entrees = () => {
           <input
             type="number"
             min="0"
-            max="11" // plus de 11 deviennent un paquet
+            max="11"
             value={bottleQuantity}
             onChange={(e) => setBottleQuantity(e.target.value)}
             style={{ width: '100%', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}

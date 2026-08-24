@@ -12,7 +12,8 @@ export const syncAllData = async () => {
       salesRes,
       movementsRes,
       cashRes,
-      settingsRes
+      settingsRes,
+      usersRes   // ✅ Ajout de la table users
     ] = await Promise.all([
       supabase.from('products').select('*'),
       supabase.from('sellers').select('*'),
@@ -21,7 +22,8 @@ export const syncAllData = async () => {
       supabase.from('sales').select('*'),
       supabase.from('stock_movements').select('*'),
       supabase.from('cash_transactions').select('*'),
-      supabase.from('settings').select('*')
+      supabase.from('settings').select('*'),
+      supabase.from('users').select('*')   // ✅ Requête vers la table users
     ]);
 
     const data = {
@@ -32,7 +34,8 @@ export const syncAllData = async () => {
       sales: salesRes.data || [],
       stock_movements: movementsRes.data || [],
       cash_transactions: cashRes.data || [],
-      settings: settingsRes.data || []
+      settings: settingsRes.data || [],
+      users: usersRes.data || []   // ✅ Ajout dans l'objet data
     };
 
     await clearAll();

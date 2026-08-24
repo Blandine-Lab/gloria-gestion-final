@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../utils/supabaseClient';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
 const Vendeurs = () => {
   const [vendeurs, setVendeurs] = useState([]);
@@ -20,16 +22,33 @@ const Vendeurs = () => {
   const fetchVendeurs = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('sellers')
-        .select('*')
-        .order('name');
-      if (error) throw error;
-      setVendeurs(data || []);
-      setError(null);
+      // 1. Lire depuis Dexie
+      const localSellers = await db.sellers.toArray();
+      if (localSellers.length > 0) {
+        setVendeurs(localSellers);
+        setError(null);
+      }
+
+      // 2. Si connecté, synchroniser depuis Supabase
+      if (navigator.onLine) {
+        await syncAll(); // synchronise toutes les tables
+        const updatedSellers = await db.sellers.toArray();
+        if (updatedSellers.length > 0) {
+          setVendeurs(updatedSellers);
+          setError(null);
+        }
+      } else {
+        if (localSellers.length === 0) {
+          setError('Aucune donnée disponible hors ligne. Connectez-vous pour synchroniser.');
+        }
+      }
     } catch (err) {
       console.error(err);
-      setError('Erreur de chargement des vendeurs');
+      if (!navigator.onLine) {
+        setError('Mode hors ligne - données locales affichées');
+      } else {
+        setError('Erreur de chargement des vendeurs');
+      }
     } finally {
       setLoading(false);
     }
@@ -83,7 +102,9 @@ const Vendeurs = () => {
         if (error) throw error;
       }
       closeModal();
-      fetchVendeurs();
+      // Synchroniser Dexie et recharger
+      await syncAll();
+      await fetchVendeurs();
     } catch (err) {
       console.error(err);
       setError(err.message);
@@ -98,7 +119,8 @@ const Vendeurs = () => {
         .delete()
         .eq('id', id);
       if (error) throw error;
-      fetchVendeurs();
+      await syncAll();
+      await fetchVendeurs();
     } catch (err) {
       console.error(err);
       setError(err.message);
@@ -109,52 +131,65 @@ const Vendeurs = () => {
     setSelectedVendeur(vendeur);
     setShowPerformance(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const { data: moves, error: movesError } = await supabase
-        .from('stock_movements')
-        .select(`
-          quantity_change,
-          movement_type,
-          created_at,
-          products(name, unit_price)
-        `)
-        .eq('cooperant_id', vendeur.id)
-        .gte('created_at', `${today}T00:00:00`)
-        .lte('created_at', `${today}T23:59:59`)
-        .order('created_at', { ascending: false });
-      if (movesError) throw movesError;
+      // Récupérer tous les mouvements et produits depuis Dexie
+      const allMovements = await db.stockMovements.toArray();
+      const allProducts = await db.products.toArray();
+      const productMap = {};
+      allProducts.forEach(p => {
+        productMap[p.id] = p;
+      });
+
+      // Filtrer les mouvements du vendeur pour aujourd'hui
+      const today = new Date();
+      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+
+      const vendeurMovements = allMovements.filter(m => {
+        const d = new Date(m.created_at);
+        return m.cooperant_id === vendeur.id && d >= startOfDay && d < endOfDay;
+      });
 
       let totalTake = 0;
       let totalReturn = 0;
-      const productMap = {};
-      moves.forEach(m => {
+      const productStats = {};
+      vendeurMovements.forEach(m => {
         const pid = m.product_id;
         if (!pid) return;
-        if (!productMap[pid]) {
-          productMap[pid] = { qty: 0, price: m.products?.unit_price || 0 };
-        }
+        const qty = Math.abs(m.quantity_change);
         if (m.movement_type === 'cooperant_take') {
-          totalTake += Math.abs(m.quantity_change);
-          productMap[pid].qty += Math.abs(m.quantity_change);
+          totalTake += qty;
+          if (!productStats[pid]) productStats[pid] = { qty: 0, price: productMap[pid]?.unit_price || 0 };
+          productStats[pid].qty += qty;
         } else if (m.movement_type === 'cooperant_return') {
-          totalReturn += Math.abs(m.quantity_change);
-          productMap[pid].qty -= Math.abs(m.quantity_change);
+          totalReturn += qty;
+          if (!productStats[pid]) productStats[pid] = { qty: 0, price: productMap[pid]?.unit_price || 0 };
+          productStats[pid].qty -= qty;
         }
       });
+
       let totalNetAmount = 0;
-      for (const pid in productMap) {
-        totalNetAmount += productMap[pid].qty * productMap[pid].price;
+      for (const pid in productStats) {
+        totalNetAmount += productStats[pid].qty * productStats[pid].price;
       }
       const netSold = totalTake - totalReturn;
+
+      // Tri des mouvements par date décroissante
+      const sortedMovements = vendeurMovements.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      // Enrichir avec les noms de produits
+      const enrichedMovements = sortedMovements.map(m => ({
+        ...m,
+        products: productMap[m.product_id] || null,
+      }));
 
       setPerformanceData({
         totalTake,
         totalReturn,
         netSold,
         totalNetAmount,
-        movementCount: moves.length,
+        movementCount: vendeurMovements.length,
       });
-      setMovements(moves);
+      setMovements(enrichedMovements);
     } catch (err) {
       console.error(err);
       setError('Erreur chargement performances');

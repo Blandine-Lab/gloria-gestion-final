@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import { supabase } from '../utils/supabaseClient';
+import api from '../services/api';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';const EntreesOperateurs = () => {
+const EntreesOperateurs = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const operatorIdFromUrl = searchParams.get('operator_id');
 
   const [operators, setOperators] = useState([]);
   const [selectedOperator, setSelectedOperator] = useState(operatorIdFromUrl || '');
-  const [type, setType] = useState('mega'); // 'mega', 'unite', 'fc', 'usd'
+  const [type, setType] = useState('mega');
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ text: '', type: '' });
@@ -22,14 +22,10 @@ import api from '../services/api';const EntreesOperateurs = () => {
 
   const fetchOperators = async () => {
     try {
-      const { data, error } = await supabase
-        .from('operators')
-        .select('*')
-        .order('name');
-      if (error) throw error;
+      const data = await db.operators.toArray();
       setOperators(data || []);
     } catch (error) {
-      console.error('Erreur chargement opérateurs:', error);
+      console.error('Erreur chargement opérateurs depuis Dexie:', error);
       setMessage({ text: 'Erreur de chargement des opérateurs', type: 'error' });
     }
   };
@@ -56,12 +52,13 @@ import api from '../services/api';const EntreesOperateurs = () => {
       });
 
       if (response.data.success) {
-        setMessage({ 
-          text: `✅ ${quantity} ${type === 'mega' ? 'mégas' : type === 'unite' ? 'unités' : type.toUpperCase()} ajoutés au stock !`, 
-          type: 'success' 
+        setMessage({
+          text: `✅ ${quantity} ${type === 'mega' ? 'mégas' : type === 'unite' ? 'unités' : type.toUpperCase()} ajoutés au stock !`,
+          type: 'success'
         });
         setQuantity(1);
-        fetchOperators();
+        await syncAll();
+        await fetchOperators();
       } else {
         setMessage({ text: response.data.error || 'Erreur', type: 'error' });
       }
@@ -76,9 +73,7 @@ import api from '../services/api';const EntreesOperateurs = () => {
   return (
     <div style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
       <h1 style={{ marginBottom: '1.5rem', color: '#1e3a8a' }}>📦 Entrées de stock pour opérateurs</h1>
-      <p style={{ marginBottom: '2rem', color: '#6b7280' }}>
-        Ajoutez des quantités (mégas, unités, FC, USD) à un opérateur.
-      </p>
+      <p style={{ marginBottom: '2rem', color: '#6b7280' }}>Ajoutez des quantités (mégas, unités, FC, USD) à un opérateur.</p>
 
       <form onSubmit={handleSubmit} style={{ background: 'white', padding: '2rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <div style={{ marginBottom: '1rem' }}>

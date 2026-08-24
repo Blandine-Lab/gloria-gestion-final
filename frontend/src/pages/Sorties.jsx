@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import axios from 'axios';
-import { supabase } from '../utils/supabaseClient';
+import api from '../services/api';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';const Sorties = () => {
+const Sorties = () => {
   const [products, setProducts] = useState([]);
   const [sellers, setSellers] = useState([]);
   const [movements, setMovements] = useState([]);
@@ -16,10 +16,16 @@ import api from '../services/api';const Sorties = () => {
   const [movementType, setMovementType] = useState('cooperant_take');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ text: '', type: '' });
+  const [dataLoading, setDataLoading] = useState(true); // ✅ Indicateur de chargement initial
 
   useEffect(() => {
-    fetchData();
-    fetchMovements();
+    const loadData = async () => {
+      setDataLoading(true);
+      await fetchData();
+      await fetchMovements();
+      setDataLoading(false);
+    };
+    loadData();
   }, []);
 
   useEffect(() => {
@@ -28,35 +34,76 @@ import api from '../services/api';const Sorties = () => {
 
   const fetchData = async () => {
     try {
-      const [productsRes, sellersRes] = await Promise.all([
-        supabase.from('products').select('*'),
-        supabase.from('sellers').select('*')
+      const [productsData, sellersData] = await Promise.all([
+        db.products.toArray(),
+        db.sellers.toArray()
       ]);
-      setProducts(productsRes.data || []);
-      setSellers(sellersRes.data || []);
+      setProducts(productsData || []);
+      setSellers(sellersData || []);
     } catch (error) {
-      console.error('Erreur chargement:', error);
+      console.error('Erreur chargement données depuis Dexie:', error);
     }
   };
 
   const fetchMovements = async () => {
     try {
-      const params = new URLSearchParams();
-      if (filterCooperant) params.append('cooperant_id', filterCooperant);
-      if (filterType) params.append('movement_type', filterType);
-      const today = new Date().toISOString().split('T')[0];
-      params.append('start_date', today);
+      let allMovements = await db.stockMovements.toArray();
 
-      const response = await api.get(`/movements?${params.toString()}`);
-      if (response.data.success) {
-        setMovements(response.data.data);
-      } else {
-        console.error('Erreur API :', response.data.error);
+      if (filterCooperant) {
+        allMovements = allMovements.filter(m => m.cooperant_id === filterCooperant);
       }
+      if (filterType) {
+        allMovements = allMovements.filter(m => m.movement_type === filterType);
+      }
+
+      const today = new Date();
+      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+
+      allMovements = allMovements.filter(m => {
+        const d = new Date(m.created_at);
+        return d >= startOfDay && d < endOfDay;
+      });
+
+      allMovements.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      const productIds = [...new Set(allMovements.map(m => m.product_id).filter(Boolean))];
+      const cooperantIds = [...new Set(allMovements.map(m => m.cooperant_id).filter(Boolean))];
+
+      const productsMap = {};
+      if (productIds.length > 0) {
+        const prods = await db.products.bulkGet(productIds);
+        prods.forEach(p => { if (p) productsMap[p.id] = p; });
+      }
+      const sellersMap = {};
+      if (cooperantIds.length > 0) {
+        const sellersList = await db.sellers.bulkGet(cooperantIds);
+        sellersList.forEach(s => { if (s) sellersMap[s.id] = s; });
+      }
+
+      const enriched = allMovements.map(m => ({
+        ...m,
+        product: productsMap[m.product_id] || null,
+        cooperant: sellersMap[m.cooperant_id] || null,
+      }));
+
+      setMovements(enriched);
+      setMessage({ text: '', type: '' });
     } catch (error) {
-      console.error('Erreur chargement mouvements:', error);
+      console.error('Erreur chargement mouvements depuis Dexie:', error);
       setMessage({ text: '❌ Erreur de chargement de l\'historique', type: 'error' });
     }
+  };
+
+  // ✅ Fonction de rafraîchissement manuel
+  const handleRefresh = async () => {
+    setDataLoading(true);
+    if (navigator.onLine) {
+      await syncAll();
+    }
+    await fetchData();
+    await fetchMovements();
+    setDataLoading(false);
   };
 
   const handleSubmit = async (e) => {
@@ -86,9 +133,9 @@ import api from '../services/api';const Sorties = () => {
       if (response.data.success) {
         setMessage({ text: '✅ Mouvement enregistré avec succès !', type: 'success' });
         setQuantity(1);
-        const { data } = await supabase.from('products').select('*');
-        setProducts(data);
-        fetchMovements();
+        await syncAll();
+        await fetchData();
+        await fetchMovements();
       } else {
         setMessage({ text: response.data.error || 'Erreur', type: 'error' });
       }
@@ -108,7 +155,6 @@ import api from '../services/api';const Sorties = () => {
     supplier_in: 'Réapprov.'
   };
 
-  // Fonction pour formater les paquets (12 bouteilles par paquet)
   const formatPackets = (qty) => {
     const absQty = Math.abs(qty);
     const packs = Math.floor(absQty / 12);
@@ -117,7 +163,6 @@ import api from '../services/api';const Sorties = () => {
     return `${packs} paquet${packs > 1 ? 's' : ''}${rest > 0 ? ` + ${rest} bouteille${rest > 1 ? 's' : ''}` : ''}`;
   };
 
-  // Récapitulatif détaillé par coopérant et produit (incluant ventes en détail)
   const getDetailedSummary = () => {
     const map = {};
     movements.forEach(m => {
@@ -127,12 +172,10 @@ import api from '../services/api';const Sorties = () => {
       const isRetail = m.movement_type === 'retail_sale';
       const cooperantId = m.cooperant_id;
 
-      // Clé unique : pour les ventes détail on utilise 'retail|productId'
       const key = isRetail ? `retail|${productId}` : (cooperantId ? `${cooperantId}|${productId}` : null);
       if (!key) return;
 
       if (isRetail) {
-        // Vente en détail
         if (!map[key]) {
           map[key] = {
             cooperantName: 'Vente en détail',
@@ -146,7 +189,6 @@ import api from '../services/api';const Sorties = () => {
         const qty = Math.abs(m.quantity_change);
         map[key].totalRetail += qty;
       } else {
-        // Mouvements des coopérants (prise / retour)
         if (!cooperantId) return;
         if (!map[key]) {
           map[key] = {
@@ -181,12 +223,27 @@ import api from '../services/api';const Sorties = () => {
         📦 Sorties / Ventes
       </h1>
 
+      {/* ✅ Message d'information si les données sont vides */}
+      {!dataLoading && products.length === 0 && sellers.length === 0 && (
+        <div style={{ background: '#fef3c7', padding: '1rem', borderRadius: '0.5rem', marginBottom: '1rem', border: '1px solid #f59e0b' }}>
+          ⚠️ Aucune donnée disponible. Veuillez vous connecter à Internet pour synchroniser les produits et coopérants.
+          {navigator.onLine && (
+            <button
+              onClick={handleRefresh}
+              style={{ marginLeft: '1rem', background: '#3b82f6', color: 'white', border: 'none', padding: '0.3rem 1rem', borderRadius: '0.3rem', cursor: 'pointer' }}
+            >
+              🔄 Synchroniser maintenant
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Formulaire */}
       <form onSubmit={handleSubmit} style={{ background: 'white', padding: '2rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
         <div style={{ marginBottom: '1rem' }}>
           <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Type de mouvement</label>
-          <select 
-            value={movementType} 
+          <select
+            value={movementType}
             onChange={(e) => setMovementType(e.target.value)}
             style={{ width: '100%', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
           >
@@ -199,8 +256,8 @@ import api from '../services/api';const Sorties = () => {
         {(movementType === 'cooperant_take' || movementType === 'cooperant_return') && (
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Coopérant</label>
-            <select 
-              value={selectedCooperator} 
+            <select
+              value={selectedCooperator}
               onChange={(e) => setSelectedCooperator(e.target.value)}
               style={{ width: '100%', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
             >
@@ -214,8 +271,8 @@ import api from '../services/api';const Sorties = () => {
 
         <div style={{ marginBottom: '1rem' }}>
           <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Produit</label>
-          <select 
-            value={selectedProduct} 
+          <select
+            value={selectedProduct}
             onChange={(e) => setSelectedProduct(e.target.value)}
             style={{ width: '100%', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
           >
@@ -228,19 +285,19 @@ import api from '../services/api';const Sorties = () => {
 
         <div style={{ marginBottom: '1rem' }}>
           <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Quantité</label>
-          <input 
-            type="number" 
+          <input
+            type="number"
             min="1"
-            value={quantity} 
+            value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
             style={{ width: '100%', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
           />
         </div>
 
         {message.text && (
-          <div style={{ 
-            padding: '0.75rem', 
-            borderRadius: '0.5rem', 
+          <div style={{
+            padding: '0.75rem',
+            borderRadius: '0.5rem',
             marginBottom: '1rem',
             background: message.type === 'success' ? '#d1fae5' : '#fecaca',
             color: message.type === 'success' ? '#065f46' : '#991b1b'
@@ -249,8 +306,8 @@ import api from '../services/api';const Sorties = () => {
           </div>
         )}
 
-        <button 
-          type="submit" 
+        <button
+          type="submit"
           disabled={loading}
           style={{
             width: '100%',
@@ -270,8 +327,8 @@ import api from '../services/api';const Sorties = () => {
 
       {/* Filtres */}
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-        <select 
-          value={filterCooperant} 
+        <select
+          value={filterCooperant}
           onChange={(e) => setFilterCooperant(e.target.value)}
           style={{ padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
         >
@@ -280,8 +337,8 @@ import api from '../services/api';const Sorties = () => {
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
-        <select 
-          value={filterType} 
+        <select
+          value={filterType}
           onChange={(e) => setFilterType(e.target.value)}
           style={{ padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
         >
@@ -290,12 +347,20 @@ import api from '../services/api';const Sorties = () => {
           <option value="cooperant_return">Retour</option>
           <option value="retail_sale">Vente détail</option>
         </select>
-        <button 
-          onClick={fetchMovements}
+        <button
+          onClick={handleRefresh} // ✅ Utilise la même fonction de rafraîchissement
           style={{ padding: '0.5rem 1rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}
         >
-          🔄 Appliquer filtres
+          🔄 Appliquer filtres & Rafraîchir
         </button>
+        {navigator.onLine && (
+          <button
+            onClick={handleRefresh}
+            style={{ padding: '0.5rem 1rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}
+          >
+            🔄 Synchroniser
+          </button>
+        )}
       </div>
 
       {/* Historique */}
@@ -359,7 +424,7 @@ import api from '../services/api';const Sorties = () => {
               </table>
             </div>
 
-            {/* --- Récapitulatif détaillé par coopérant et produit (incluant ventes en détail) --- */}
+            {/* Récapitulatif détaillé */}
             {(() => {
               const summary = getDetailedSummary();
               if (summary.length === 0) return null;
@@ -403,7 +468,6 @@ import api from '../services/api';const Sorties = () => {
                             </td>
                           </tr>
                         ))}
-                        {/* Ligne TOTAL GÉNÉRAL */}
                         <tr style={{ background: '#f3f4f6', fontWeight: 'bold', borderTop: '2px solid #1e3a8a' }}>
                           <td colSpan="3" style={{ padding: '0.5rem', textAlign: 'right' }}>TOTAL GÉNÉRAL</td>
                           <td style={{ padding: '0.5rem', textAlign: 'center' }}>—</td>

@@ -1,12 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import { supabase } from '../utils/supabaseClient';
-import { db } from '../utils/db';
-import { syncAllData } from '../utils/sync';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';const Stocks = () => {
+const Stocks = () => {
   const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,7 +14,6 @@ import api from '../services/api';const Stocks = () => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(() => {
-    // Écouter les changements de connectivité
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
@@ -42,37 +38,28 @@ import api from '../services/api';const Stocks = () => {
       if (localProducts.length > 0) {
         setProducts(localProducts);
         updateStats(localProducts);
+      } else {
+        // Aucune donnée locale
+        setError('Aucune donnée disponible. Connectez-vous pour synchroniser.');
       }
 
-      // 2. Si connecté, récupérer depuis Supabase et mettre à jour la base locale
+      // 2. Si connecté, synchroniser en arrière‑plan
       if (isOnline) {
-        // Synchroniser toutes les données (appel unique)
-        await syncAllData(); // Cette fonction met à jour toutes les tables
-
-        // Récupérer les produits mis à jour depuis Supabase
-        const response = await api.get('/dashboard/stats');
-        if (response.data.success) {
-          const productsData = response.data.data.products || [];
-          // Mettre à jour la base locale
-          await db.products.bulkPut(productsData);
-          setProducts(productsData);
-          updateStats(productsData);
-        } else {
-          setError('Erreur de chargement des données');
-        }
-      } else {
-        // Hors ligne : on utilise les données locales déjà affichées
-        if (localProducts.length === 0) {
-          setError('Aucune donnée disponible hors ligne. Connectez-vous pour synchroniser.');
+        await syncAll(); // synchronise toutes les tables
+        // Recharger les produits après synchronisation
+        const updatedProducts = await db.products.toArray();
+        if (updatedProducts.length > 0) {
+          setProducts(updatedProducts);
+          updateStats(updatedProducts);
+          setError(null);
         }
       }
     } catch (err) {
       console.error(err);
-      // Si erreur réseau, on garde les données locales déjà affichées
-      if (!isOnline) {
-        setError('Mode hors ligne - données locales affichées');
-      } else {
-        setError('Impossible de contacter le serveur');
+      if (!isOnline && products.length === 0) {
+        setError('Mode hors ligne - aucune donnée locale disponible');
+      } else if (isOnline) {
+        setError('Erreur de synchronisation');
       }
     } finally {
       setLoading(false);
@@ -83,47 +70,87 @@ import api from '../services/api';const Stocks = () => {
     let totalBottles = 0;
     let totalPackets = 0;
     productsData.forEach(p => {
-      totalBottles += p.current_stock;
+      totalBottles += p.current_stock || 0;
       const bottlesPerPack = p.bottles_per_pack || 12;
-      totalPackets += Math.floor(p.current_stock / bottlesPerPack);
+      totalPackets += Math.floor((p.current_stock || 0) / bottlesPerPack);
     });
     setStats({ totalBottles, totalPackets });
   };
 
   const fetchDailyData = async () => {
     try {
-      // Essayer d'abord depuis le cache local (Dexie) pour le suivi journalier
-      // Mais le suivi journalier est calculé côté serveur, donc on le récupère via API
-      // Si hors ligne, on affiche un message
-      if (isOnline) {
-        const response = await api.get('/stock/daily');
-        if (response.data.success) {
-          setDailyData(response.data.data);
-          const today = new Date().toLocaleDateString('fr-FR');
-          setDailyDate(today);
-        } else {
-          console.error('Erreur chargement suivi journalier');
+      // Récupérer tous les produits et mouvements locaux
+      const allProducts = await db.products.toArray();
+      const allMovements = await db.stockMovements.toArray();
+
+      // Définir la plage de date (jour actuel)
+      const today = new Date();
+      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+
+      // Filtrer les mouvements du jour
+      const todayMovements = allMovements.filter(m => {
+        const d = new Date(m.created_at);
+        return d >= startOfDay && d < endOfDay;
+      });
+
+      // Construire le suivi par produit
+      const productMap = {};
+      allProducts.forEach(p => {
+        productMap[p.id] = {
+          id: p.id,
+          name: p.name,
+          current_stock: p.current_stock,
+          reorder_level: p.reorder_level,
+          size: p.size,
+          bottles_per_pack: p.bottles_per_pack || 12,
+          initialStock: 0,
+          entries: 0,
+          exits: 0,
+          finalStock: p.current_stock,
+        };
+      });
+
+      // Calculer les entrées/sorties du jour
+      todayMovements.forEach(m => {
+        const pid = m.product_id;
+        if (!productMap[pid]) return;
+        const qty = Math.abs(m.quantity_change);
+        const type = m.movement_type;
+        if (type === 'supplier_in' || type === 'cooperant_return') {
+          productMap[pid].entries += qty;
+        } else if (type === 'cooperant_take' || type === 'retail_sale') {
+          productMap[pid].exits += qty;
         }
-      } else {
-        // Hors ligne : on ne peut pas récupérer le suivi journalier, on affiche rien ou un message
-        setDailyData([]);
-        setDailyDate(new Date().toLocaleDateString('fr-FR') + ' (hors ligne)');
-      }
+      });
+
+      // Calculer le stock initial
+      const result = Object.values(productMap).map(p => {
+        const initialStock = p.current_stock - p.entries + p.exits;
+        return {
+          ...p,
+          initialStock: Math.max(initialStock, 0),
+          finalStock: p.current_stock,
+        };
+      });
+
+      setDailyData(result);
+      setDailyDate(today.toLocaleDateString('fr-FR', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      }));
     } catch (err) {
-      console.error(err);
-      // En cas d'erreur, on garde les données existantes ou on affiche un message
-      if (!isOnline) {
-        setDailyDate(new Date().toLocaleDateString('fr-FR') + ' (hors ligne)');
-      }
+      console.error('Erreur suivi journalier local:', err);
     }
   };
 
-  // Rafraîchir manuellement
-  const handleRefresh = () => {
-    fetchData();
-    if (isOnline) {
-      fetchDailyData();
-    }
+  const handleRefresh = async () => {
+    setLoading(true);
+    await fetchData();
+    await fetchDailyData();
+    setLoading(false);
   };
 
   if (loading) return (

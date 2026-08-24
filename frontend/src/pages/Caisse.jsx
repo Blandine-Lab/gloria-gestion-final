@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import axios from 'axios';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import api from '../services/api';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';const Caisse = () => {
+const Caisse = () => {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -27,54 +28,74 @@ import api from '../services/api';const Caisse = () => {
   const [totalExpense, setTotalExpense] = useState(0);
   const [closingBalance, setClosingBalance] = useState(0);
 
-  useEffect(() => {
-    fetchTransactions();
-  }, [dateRange]);
-
+  // Chargement des transactions depuis Dexie
   const fetchTransactions = async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams({
-        start_date: dateRange.start,
-        end_date: dateRange.end,
+      const startDate = new Date(dateRange.start);
+      const endDate = new Date(dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+
+      // Lire toutes les transactions depuis Dexie
+      const allTransactions = await db.cashTransactions.toArray();
+
+      // Filtrer par date
+      const filtered = allTransactions.filter(t => {
+        const tDate = new Date(t.transaction_date);
+        return tDate >= startDate && tDate <= endDate;
       });
-      const response = await api.get(`/cash/transactions?${params.toString()}`);
-      if (response.data.success) {
-        const data = response.data.data;
-        setTransactions(data);
 
-        // Calculer les totaux
-        let income = 0, expense = 0;
-        data.forEach(t => {
-          if (t.type === 'income') income += t.amount;
-          else expense += t.amount;
-        });
-        setTotalIncome(income);
-        setTotalExpense(expense);
+      // Trier par date (du plus ancien au plus récent)
+      const sorted = filtered.sort((a, b) => new Date(a.transaction_date) - new Date(b.transaction_date));
 
-        // Récupérer le solde d'ouverture (avant le début de la journée)
-        const openingResponse = await api.get(`/cash/transactions?end_date=${dateRange.start}`);
-        let opening = 0;
-        if (openingResponse.data.success) {
-          openingResponse.data.data.forEach(t => {
-            if (t.type === 'income') opening += t.amount;
-            else opening -= t.amount;
-          });
-        }
-        setOpeningBalance(opening);
-        setClosingBalance(opening + income - expense);
+      setTransactions(sorted);
 
-        setError(null);
-      } else {
-        setError('Erreur de chargement des transactions');
-      }
+      // Calculer les totaux de la période
+      let income = 0, expense = 0;
+      sorted.forEach(t => {
+        if (t.type === 'income') income += t.amount;
+        else expense += t.amount;
+      });
+      setTotalIncome(income);
+      setTotalExpense(expense);
+
+      // Calculer le solde d'ouverture (toutes les transactions avant la date de début)
+      const allBefore = allTransactions.filter(t => {
+        const tDate = new Date(t.transaction_date);
+        return tDate < startDate;
+      });
+      let opening = 0;
+      allBefore.forEach(t => {
+        if (t.type === 'income') opening += t.amount;
+        else opening -= t.amount;
+      });
+      setOpeningBalance(opening);
+      setClosingBalance(opening + income - expense);
+
+      setError(null);
     } catch (err) {
-      console.error(err);
-      setError('Impossible de contacter le serveur');
+      console.error('Erreur chargement des transactions locales:', err);
+      setError('Impossible de charger les données locales');
     } finally {
       setLoading(false);
     }
   };
+
+  // Rafraîchir en arrière‑plan (synchronisation + relecture)
+  const refreshData = async () => {
+    if (navigator.onLine) {
+      try {
+        await syncAll(); // Met à jour Dexie
+      } catch (e) {
+        console.warn('Erreur de synchronisation:', e);
+      }
+    }
+    await fetchTransactions(); // Recharger depuis Dexie
+  };
+
+  useEffect(() => {
+    fetchTransactions();
+  }, [dateRange]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -83,6 +104,7 @@ import api from '../services/api';const Caisse = () => {
       return;
     }
     try {
+      // Envoyer à l'API
       const response = await api.post('/cash/transaction', {
         ...formData,
         amount: parseFloat(formData.amount),
@@ -91,7 +113,10 @@ import api from '../services/api';const Caisse = () => {
       if (response.data.success) {
         setShowModal(false);
         setFormData({ type: 'income', category: 'Vente jus', description: '', amount: '', payment_method: 'cash' });
-        fetchTransactions();
+        // Synchroniser Dexie en arrière‑plan
+        await syncAll();
+        // Recharger l'affichage
+        await fetchTransactions();
       } else {
         setError(response.data.error || 'Erreur');
       }
@@ -163,7 +188,7 @@ import api from '../services/api';const Caisse = () => {
           />
         </div>
         <button
-          onClick={fetchTransactions}
+          onClick={refreshData}
           style={{ background: '#3b82f6', color: 'white', padding: '0.3rem 1rem', border: 'none', borderRadius: '0.3rem', cursor: 'pointer' }}
         >
           🔄 Appliquer
@@ -216,6 +241,7 @@ import api from '../services/api';const Caisse = () => {
               </thead>
               <tbody>
                 {transactions.map((t, index) => {
+                  // Calcul du solde après chaque transaction (pour affichage)
                   let balance = openingBalance;
                   for (let i = 0; i <= index; i++) {
                     if (transactions[i].type === 'income') balance += transactions[i].amount;
@@ -254,7 +280,7 @@ import api from '../services/api';const Caisse = () => {
         )}
       </div>
 
-      {/* Modal d'ajout de transaction */}
+      {/* Modal d'ajout de transaction (inchangé) */}
       {showModal && (
         <div style={{
           position: 'fixed',

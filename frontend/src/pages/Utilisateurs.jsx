@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import axios from 'axios';
+import api from '../services/api';
+import db from '../db';
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';const Utilisateurs = () => {
+const Utilisateurs = () => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -23,16 +24,38 @@ import api from '../services/api';const Utilisateurs = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/users');
-      if (response.data.success) {
-        setUsers(response.data.data);
+      // 1. Lire depuis Dexie
+      const localUsers = await db.users.toArray();
+      if (localUsers.length > 0) {
+        setUsers(localUsers);
         setError(null);
+      }
+
+      // 2. Si connecté, synchroniser depuis l'API
+      if (navigator.onLine) {
+        const response = await api.get('/users');
+        if (response.data.success) {
+          const serverUsers = response.data.data;
+          // Mettre à jour Dexie
+          await db.users.clear();
+          await db.users.bulkPut(serverUsers);
+          setUsers(serverUsers);
+          setError(null);
+        } else {
+          setError('Erreur de chargement des utilisateurs depuis le serveur');
+        }
       } else {
-        setError('Erreur de chargement des utilisateurs');
+        if (localUsers.length === 0) {
+          setError('Aucune donnée disponible hors ligne. Connectez-vous pour synchroniser.');
+        }
       }
     } catch (err) {
       console.error(err);
-      setError('Impossible de contacter le serveur');
+      if (!navigator.onLine) {
+        setError('Mode hors ligne - données locales affichées');
+      } else {
+        setError('Impossible de contacter le serveur');
+      }
     } finally {
       setLoading(false);
     }
@@ -86,11 +109,13 @@ import api from '../services/api';const Utilisateurs = () => {
       if (editingUser) {
         response = await api.put(`/users/${editingUser.id}`, formData);
       } else {
-        response = await api.post('/api/users', formData);
+        response = await api.post('/users', formData);
       }
       if (response.data.success) {
         closeModal();
-        fetchUsers();
+        // Synchroniser Dexie après écriture
+        await syncAll(); // ou syncUsers spécifique
+        await fetchUsers();
       } else {
         setError(response.data.error || 'Erreur');
       }
@@ -104,7 +129,9 @@ import api from '../services/api';const Utilisateurs = () => {
     if (!window.confirm('Supprimer cet utilisateur définitivement ?')) return;
     try {
       await api.delete(`/users/${id}`);
-      fetchUsers();
+      // Synchroniser Dexie
+      await syncAll();
+      await fetchUsers();
     } catch (err) {
       console.error(err);
       setError('Erreur suppression');
@@ -183,7 +210,7 @@ import api from '../services/api';const Utilisateurs = () => {
         </div>
       )}
 
-      {/* Modal d'ajout / modification - avec textes en noir */}
+      {/* Modal d'ajout / modification */}
       {showModal && (
         <div style={{
           position: 'fixed',

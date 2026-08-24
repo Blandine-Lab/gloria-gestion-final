@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../utils/supabaseClient';
 import axios from 'axios';
+import api from '../services/api';
+import db from '../db'; // Base locale Dexie
+import { syncAll } from '../services/syncService';
 
-
-import api from '../services/api';// Liste des modules disponibles (correspond aux onglets de la navbar)
+// Liste des modules disponibles (correspond aux onglets de la navbar)
 const MODULES = [
   { key: 'dashboard', label: 'Tableau de bord' },
   { key: 'stocks', label: 'Gestion des stocks' },
@@ -89,7 +91,7 @@ const Admin = () => {
   };
 
   // =============================================
-  // CHARGEMENT DES DONNÉES
+  // CHARGEMENT DES DONNÉES (DEPUIS DEXIE)
   // =============================================
   const fetchAllData = async () => {
     await Promise.all([
@@ -97,36 +99,55 @@ const Admin = () => {
       fetchProducts(),
       fetchOperators(),
       fetchClients(),
-      fetchUsers(),
+      fetchUsers(), // toujours via API pour les utilisateurs
     ]);
   };
 
+  // Lecture des coopérants depuis Dexie
   const fetchSellers = async () => {
-    const { data, error } = await supabase.from('sellers').select('*').order('name');
-    if (!error) setSellers(data || []);
-  };
-
-  const fetchProducts = async () => {
-    const { data, error } = await supabase.from('products').select('*').order('name');
-    if (!error) setProducts(data || []);
-  };
-
-  const fetchOperators = async () => {
-    const { data, error } = await supabase.from('operators').select('*').order('name');
-    if (!error) {
-      const filtered = data.filter(op => ALLOWED_OPERATORS.includes(op.name));
-      setOperators(filtered);
+    try {
+      const data = await db.sellers.toArray();
+      setSellers(data || []);
+    } catch (error) {
+      console.error('Erreur chargement sellers depuis Dexie:', error);
     }
   };
 
-  const fetchClients = async () => {
-    const { data, error } = await supabase.from('clients').select('*').order('name');
-    if (!error) setClients(data || []);
+  // Lecture des produits depuis Dexie
+  const fetchProducts = async () => {
+    try {
+      const data = await db.products.toArray();
+      setProducts(data || []);
+    } catch (error) {
+      console.error('Erreur chargement produits depuis Dexie:', error);
+    }
   };
 
+  // Lecture des opérateurs depuis Dexie
+  const fetchOperators = async () => {
+    try {
+      const data = await db.operators.toArray();
+      const filtered = data.filter(op => ALLOWED_OPERATORS.includes(op.name));
+      setOperators(filtered);
+    } catch (error) {
+      console.error('Erreur chargement opérateurs depuis Dexie:', error);
+    }
+  };
+
+  // Lecture des clients depuis Dexie
+  const fetchClients = async () => {
+    try {
+      const data = await db.clients.toArray();
+      setClients(data || []);
+    } catch (error) {
+      console.error('Erreur chargement clients depuis Dexie:', error);
+    }
+  };
+
+  // Lecture des utilisateurs via l'API (car Dexie n'a peut-être pas de table "users")
   const fetchUsers = async () => {
     try {
-      const response = await api.get('/api/users');
+      const response = await api.get('/users');
       if (response.data.success) {
         setUsers(response.data.data);
       }
@@ -148,9 +169,14 @@ const Admin = () => {
     try {
       const { data, error } = await supabase.from('sellers').insert([newSeller]).select();
       if (error) throw error;
+      // Mettre à jour l'état local
       setSellers([...sellers, data[0]]);
       setNewSeller({ name: '', email: '', phone: '' });
       setMessage({ text: '✅ Coopérant ajouté', type: 'success' });
+      // Synchroniser Dexie en arrière-plan
+      await syncAll();
+      // Recharger depuis Dexie pour être cohérent
+      await fetchSellers();
     } catch (error) {
       setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     } finally {
@@ -160,10 +186,15 @@ const Admin = () => {
 
   const deleteSeller = async (id) => {
     if (!confirm('Supprimer ce coopérant ?')) return;
-    const { error } = await supabase.from('sellers').delete().eq('id', id);
-    if (!error) {
+    try {
+      const { error } = await supabase.from('sellers').delete().eq('id', id);
+      if (error) throw error;
       setSellers(sellers.filter(s => s.id !== id));
       setMessage({ text: '✅ Coopérant supprimé', type: 'success' });
+      await syncAll();
+      await fetchSellers();
+    } catch (error) {
+      setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     }
   };
 
@@ -219,6 +250,8 @@ const Admin = () => {
         size: 'small'
       });
       setMessage({ text: '✅ Produit ajouté', type: 'success' });
+      await syncAll();
+      await fetchProducts();
     } catch (error) {
       setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     } finally {
@@ -228,10 +261,15 @@ const Admin = () => {
 
   const deleteProduct = async (id) => {
     if (!confirm('Supprimer ce produit ?')) return;
-    const { error } = await supabase.from('products').delete().eq('id', id);
-    if (!error) {
+    try {
+      const { error } = await supabase.from('products').delete().eq('id', id);
+      if (error) throw error;
       setProducts(products.filter(p => p.id !== id));
       setMessage({ text: '✅ Produit supprimé', type: 'success' });
+      await syncAll();
+      await fetchProducts();
+    } catch (error) {
+      setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     }
   };
 
@@ -260,6 +298,8 @@ const Admin = () => {
       setOperators([...operators, data[0]]);
       setNewOperator({ name: '' });
       setMessage({ text: '✅ Opérateur ajouté', type: 'success' });
+      await syncAll();
+      await fetchOperators();
     } catch (error) {
       setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     } finally {
@@ -269,10 +309,15 @@ const Admin = () => {
 
   const deleteOperator = async (id) => {
     if (!confirm('Supprimer cet opérateur ?')) return;
-    const { error } = await supabase.from('operators').delete().eq('id', id);
-    if (!error) {
+    try {
+      const { error } = await supabase.from('operators').delete().eq('id', id);
+      if (error) throw error;
       setOperators(operators.filter(o => o.id !== id));
       setMessage({ text: '✅ Opérateur supprimé', type: 'success' });
+      await syncAll();
+      await fetchOperators();
+    } catch (error) {
+      setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     }
   };
 
@@ -298,9 +343,10 @@ const Admin = () => {
         .update({ [field]: newValue })
         .eq('id', id);
       if (updateError) throw updateError;
-      fetchOperators();
       setOperatorStockUpdate({ id: '', type: 'mega', quantity: '' });
       setMessage({ text: `✅ Stock ${type === 'mega' ? 'mégas' : 'unités'} mis à jour`, type: 'success' });
+      await syncAll();
+      await fetchOperators();
     } catch (error) {
       setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     } finally {
@@ -330,9 +376,10 @@ const Admin = () => {
         .update({ [field]: newValue })
         .eq('id', id);
       if (updateError) throw updateError;
-      fetchOperators();
       setOperatorMoneyUpdate({ id: '', currency: 'FC', amount: '' });
       setMessage({ text: `✅ Solde ${currency} mis à jour`, type: 'success' });
+      await syncAll();
+      await fetchOperators();
     } catch (error) {
       setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     } finally {
@@ -361,6 +408,8 @@ const Admin = () => {
       setClients([...clients, data[0]]);
       setNewClient({ name: '', phone: '', credit_balance: '' });
       setMessage({ text: '✅ Client ajouté', type: 'success' });
+      await syncAll();
+      await fetchClients();
     } catch (error) {
       setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     } finally {
@@ -370,15 +419,20 @@ const Admin = () => {
 
   const deleteClient = async (id) => {
     if (!confirm('Supprimer ce client ?')) return;
-    const { error } = await supabase.from('clients').delete().eq('id', id);
-    if (!error) {
+    try {
+      const { error } = await supabase.from('clients').delete().eq('id', id);
+      if (error) throw error;
       setClients(clients.filter(c => c.id !== id));
       setMessage({ text: '✅ Client supprimé', type: 'success' });
+      await syncAll();
+      await fetchClients();
+    } catch (error) {
+      setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
     }
   };
 
   // =============================================
-  // GESTION DES UTILISATEURS (avec permissions)
+  // GESTION DES UTILISATEURS (inchangée)
   // =============================================
   const openUserModal = (user = null) => {
     if (user) {
@@ -439,11 +493,11 @@ const Admin = () => {
       if (editingUser) {
         response = await api.put(`/users/${editingUser.id}`, userForm);
       } else {
-        response = await api.post('/api/users', userForm);
+        response = await api.post('/users', userForm);
       }
       if (response.data.success) {
         closeUserModal();
-        fetchUsers();
+        await fetchUsers();
         setMessage({ text: `✅ Utilisateur ${editingUser ? 'modifié' : 'créé'} avec succès`, type: 'success' });
       } else {
         setMessage({ text: response.data.error || 'Erreur', type: 'error' });
@@ -460,7 +514,7 @@ const Admin = () => {
     if (!confirm('Supprimer cet utilisateur définitivement ?')) return;
     try {
       await api.delete(`/users/${id}`);
-      fetchUsers();
+      await fetchUsers();
       setMessage({ text: '✅ Utilisateur supprimé', type: 'success' });
     } catch (error) {
       console.error(error);
@@ -684,7 +738,7 @@ const Admin = () => {
       </div>
 
       {/* ============================================
-          LIGNE 1 : Coopérants et Produits (inchangé)
+          LIGNE 1 : Coopérants et Produits
           ============================================ */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '2rem', marginBottom: '2rem' }}>
         {/* Ajouter un coopérant */}
@@ -846,7 +900,7 @@ const Admin = () => {
               />
             </div>
             <button type="submit" disabled={loading} style={{ width: '100%', padding: '0.5rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}>
-              {loading ? 'Ajout...' : 'Ajouter l\'opérateur'}
+              {loading ? 'Ajout...' : "Ajouter l'opérateur"}
             </button>
           </form>
 

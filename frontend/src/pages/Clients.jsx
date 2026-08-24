@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import db from '../db';
 import { supabase } from '../utils/supabaseClient';
+import { syncAll } from '../services/syncService';
 
 const Clients = () => {
   const [clients, setClients] = useState([]);
@@ -12,19 +14,14 @@ const Clients = () => {
   const [transactions, setTransactions] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
-  useEffect(() => {
-    fetchClients();
-  }, []);
-
+  // Chargement des clients depuis Dexie
   const fetchClients = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('clients')
-        .select('*')
-        .order('name');
-      if (error) throw error;
-      setClients(data || []);
+      const data = await db.clients.toArray();
+      // Trier par nom
+      data.sort((a, b) => a.name.localeCompare(b.name));
+      setClients(data);
       setError(null);
     } catch (err) {
       console.error(err);
@@ -33,6 +30,22 @@ const Clients = () => {
       setLoading(false);
     }
   };
+
+  // Rafraîchir en arrière‑plan (synchronisation + relecture)
+  const refreshData = async () => {
+    if (navigator.onLine) {
+      try {
+        await syncAll(); // Met à jour Dexie
+      } catch (e) {
+        console.warn('Erreur de synchronisation:', e);
+      }
+    }
+    await fetchClients(); // Recharger depuis Dexie
+  };
+
+  useEffect(() => {
+    fetchClients();
+  }, []);
 
   const openModal = (client = null) => {
     if (client) {
@@ -70,21 +83,24 @@ const Clients = () => {
       };
 
       if (editingClient) {
-        // Modification
+        // Modification dans Supabase
         const { error } = await supabase
           .from('clients')
           .update(payload)
           .eq('id', editingClient.id);
         if (error) throw error;
       } else {
-        // Ajout
+        // Ajout dans Supabase
         const { error } = await supabase
           .from('clients')
           .insert([payload]);
         if (error) throw error;
       }
       closeModal();
-      fetchClients();
+      // Synchroniser Dexie en arrière‑plan
+      await syncAll();
+      // Recharger l'affichage
+      await fetchClients();
     } catch (err) {
       console.error(err);
       setError(err.message);
@@ -99,33 +115,27 @@ const Clients = () => {
         .delete()
         .eq('id', id);
       if (error) throw error;
-      fetchClients();
+      await syncAll();
+      await fetchClients();
     } catch (err) {
       console.error(err);
       setError(err.message);
     }
   };
 
+  // Historique des transactions depuis Dexie (table `sales`)
   const viewHistory = async (client) => {
     setViewingClient(client);
     setShowHistory(true);
     try {
-      const { data, error } = await supabase
-        .from('sales')
-        .select(`
-          id,
-          total_amount,
-          payment_method,
-          sale_date,
-          note,
-          sale_type,
-          operators(name)
-        `)
-        .eq('client_id', client.id)
-        .order('sale_date', { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      setTransactions(data || []);
+      // Lire toutes les ventes depuis Dexie
+      const allSales = await db.sales.toArray();
+      // Filtrer par client_id
+      const clientSales = allSales
+        .filter(s => s.client_id === client.id)
+        .sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date))
+        .slice(0, 50); // Limiter à 50 pour l'affichage
+      setTransactions(clientSales);
     } catch (err) {
       console.error(err);
       setError('Erreur chargement historique');
