@@ -1,5 +1,5 @@
 import { supabase } from '../utils/supabaseClient';
-import { db } from '../db'; // suppose que db.js exporte la base Dexie
+import db from '../db'; // ✅ correction : import par défaut
 
 // Mapping des tables locales -> noms Supabase
 const TABLE_MAP = {
