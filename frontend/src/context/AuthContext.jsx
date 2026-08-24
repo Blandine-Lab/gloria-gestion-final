@@ -1,6 +1,9 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 
+// URL du backend en dur (temporaire pour test)
+const API_URL = 'https://gloria-gestion-final-backend.vercel.app/api';
+
 const AuthContext = createContext();
 
 export const useAuth = () => useContext(AuthContext);
@@ -21,7 +24,7 @@ export const AuthProvider = ({ children }) => {
 
   const verifyToken = async () => {
     try {
-      const response = await axios.get('/api/auth/me');
+      const response = await axios.get(`${API_URL}/auth/me`);
       if (response.data.success) {
         setUser(response.data.user);
       } else {
@@ -36,7 +39,7 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const response = await axios.post('/api/auth/login', { email, password });
+      const response = await axios.post(`${API_URL}/auth/login`, { email, password });
       if (response.data.success) {
         const { token, user } = response.data;
         localStorage.setItem('token', token);
