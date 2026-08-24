@@ -15,7 +15,7 @@ const ProtectedRoute = ({ children, requiredRole }) => {
   }
 
   if (requiredRole && !hasPermission(requiredRole)) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/api/dashboard" replace />;
   }
 
   return children;

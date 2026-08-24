@@ -13,7 +13,7 @@ const Navbar = () => {
 
   // Définition des onglets
   const tabs = [
-    { name: 'Dashboard', path: '/dashboard' },
+    { name: 'Dashboard', path: '/api/dashboard' },
     { name: 'Stocks', path: '/stocks' },
     { name: 'Sorties', path: '/sorties' },
     { name: 'Ventes-Mega', path: '/ventes-mega' },

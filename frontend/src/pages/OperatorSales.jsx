@@ -150,7 +150,7 @@ const OperatorSales = () => {
         setStock(prev => ({ ...prev, [field]: newStock }));
       }
 
-      const response = await axios.post('/sale', saleData);
+      const response = await axios.post('/api/sale', saleData);
 
       if (response.data.success) {
         setMessage({ text: '✅ Transaction enregistrée avec succès !', type: 'success' });

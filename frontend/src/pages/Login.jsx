@@ -17,7 +17,7 @@ const Login = () => {
     setLoading(true);
     const result = await login(email, password);
     if (result.success) {
-      navigate('/dashboard');
+      navigate('/api/dashboard');
     } else {
       setError(result.error || 'Identifiants incorrects');
     }

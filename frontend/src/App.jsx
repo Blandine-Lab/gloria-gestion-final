@@ -35,7 +35,7 @@ function App() {
                 <Home />
               </ProtectedRoute>
             } />
-            <Route path="/dashboard" element={
+            <Route path="/api/dashboard" element={
               <ProtectedRoute requiredRole="dashboard">
                 <Dashboard />
               </ProtectedRoute>

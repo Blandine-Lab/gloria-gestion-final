@@ -15,7 +15,7 @@ const Parametres = () => {
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/settings');
+      const response = await axios.get('/api/settings');
       if (response.data.success) {
         const settingsObj = {};
         response.data.data.forEach(s => {

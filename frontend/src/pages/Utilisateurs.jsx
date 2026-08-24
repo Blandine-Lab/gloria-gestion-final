@@ -22,7 +22,7 @@ const Utilisateurs = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/users');
+      const response = await axios.get('/api/users');
       if (response.data.success) {
         setUsers(response.data.data);
         setError(null);
@@ -85,7 +85,7 @@ const Utilisateurs = () => {
       if (editingUser) {
         response = await axios.put(`/users/${editingUser.id}`, formData);
       } else {
-        response = await axios.post('/users', formData);
+        response = await axios.post('/api/users', formData);
       }
       if (response.data.success) {
         closeModal();

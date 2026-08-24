@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 
 const modules = [
-  { id: 1, name: 'Tableau de bord', image: '/tableau.jpg', path: '/dashboard' },
+  { id: 1, name: 'Tableau de bord', image: '/tableau.jpg', path: '/api/dashboard' },
   { id: 2, name: 'Gestion des stocks', image: '/stock.jpg', path: '/stocks' },
   { id: 3, name: 'Entrées en stock', image: '/entree.jpg', path: '/entrees' },
   { id: 4, name: 'Sorties / Ventes', image: '/sortie.jpg', path: '/sorties' },

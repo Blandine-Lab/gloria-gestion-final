@@ -125,7 +125,7 @@ const Admin = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await axios.get('/users');
+      const response = await axios.get('/api/users');
       if (response.data.success) {
         setUsers(response.data.data);
       }
@@ -438,7 +438,7 @@ const Admin = () => {
       if (editingUser) {
         response = await axios.put(`/users/${editingUser.id}`, userForm);
       } else {
-        response = await axios.post('/users', userForm);
+        response = await axios.post('/api/users', userForm);
       }
       if (response.data.success) {
         closeUserModal();
