@@ -97,7 +97,7 @@ const Login = () => {
             fontSize: '0.85rem',
             textAlign: 'center',
           }}>
-            {error}
+            {typeof error === 'string' ? error : error?.message || 'Identifiants incorrects'}
           </div>
         )}
 
