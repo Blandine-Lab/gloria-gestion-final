@@ -21,6 +21,7 @@ const OperatorSales = () => {
   const [operator, setOperator] = useState(null);
   const [clients, setClients] = useState([]);
   const [sales, setSales] = useState([]);
+  const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('megas');
   const [stock, setStock] = useState({ stock_megas: 0, stock_unites: 0 });
@@ -59,7 +60,13 @@ const OperatorSales = () => {
       const clientsData = await db.clients.toArray();
       setClients(clientsData || []);
 
-      // 3. Charger les ventes du jour depuis Dexie (table sales)
+      // 3. Charger les paramètres (prix des mégas et unités)
+      const settingsData = await db.settings.toArray();
+      const settingsObj = {};
+      settingsData.forEach(s => { settingsObj[s.key] = s.value; });
+      setSettings(settingsObj);
+
+      // 4. Charger les ventes du jour depuis Dexie (table sales)
       const today = new Date();
       const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
@@ -123,7 +130,11 @@ const OperatorSales = () => {
         saleData.beneficiary_name = formData.beneficiary_name;
         saleData.confirmation_code = formData.confirmation_code;
       } else {
-        const unitPrice = 500;
+        // Lecture du prix unitaire depuis les paramètres
+        const unitPrice = activeTab === 'megas'
+          ? parseFloat(settings.mega_price) || parseFloat(settings.default_unit_price) || 500
+          : parseFloat(settings.unite_price) || parseFloat(settings.default_unit_price) || 500;
+
         const quantity = parseInt(formData.quantity);
         saleData.total_amount = quantity * unitPrice;
         saleData.quantity = quantity; // ajouté pour la trace
@@ -191,6 +202,11 @@ const OperatorSales = () => {
 
   const totalSales = sales.reduce((sum, s) => sum + s.total_amount, 0);
   const displayName = activeTab === 'emoney' ? operator.name : getShortName(operator.name);
+
+  // Prix unitaires dynamiques
+  const unitPriceMega = parseFloat(settings.mega_price) || parseFloat(settings.default_unit_price) || 500;
+  const unitPriceUnite = parseFloat(settings.unite_price) || parseFloat(settings.default_unit_price) || 500;
+  const currentUnitPrice = activeTab === 'megas' ? unitPriceMega : unitPriceUnite;
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
@@ -379,11 +395,11 @@ const OperatorSales = () => {
                   <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Montant total (FC)</label>
                   <input
                     type="text"
-                    value={parseInt(formData.quantity) * 500 || 0}
+                    value={parseInt(formData.quantity) * currentUnitPrice || 0}
                     style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db', background: '#f3f4f6' }}
                     readOnly
                   />
-                  <small style={{ color: '#6b7280' }}>Prix unitaire : 500 FC</small>
+                  <small style={{ color: '#6b7280' }}>Prix unitaire : {currentUnitPrice} FC</small>
                 </div>
               </>
             )}
