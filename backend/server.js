@@ -304,7 +304,7 @@ app.post('/api/movement', async (req, res) => {
 });
 
 // =============================================
-// ROUTE 2b : Récupérer un produit par ID (AJOUTÉ)
+// ROUTE 2b : Récupérer un produit par ID
 // =============================================
 app.get('/api/products/:id', async (req, res) => {
   try {
@@ -324,7 +324,7 @@ app.get('/api/products/:id', async (req, res) => {
 });
 
 // =============================================
-// ROUTE 2c : Mettre à jour un mouvement (AJOUTÉ)
+// ROUTE 2c : Mettre à jour un mouvement
 // =============================================
 app.put('/api/movement/:id', async (req, res) => {
   try {
@@ -346,6 +346,33 @@ app.put('/api/movement/:id', async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     console.error('Erreur mise à jour mouvement:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 2d : Mettre à jour le stock d'un produit (NOUVEAU)
+// =============================================
+app.put('/api/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { current_stock } = req.body;
+
+    if (current_stock === undefined) {
+      return res.status(400).json({ success: false, error: 'current_stock est requis' });
+    }
+
+    const { data, error } = await supabase
+      .from('products')
+      .update({ current_stock })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur mise à jour produit:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
