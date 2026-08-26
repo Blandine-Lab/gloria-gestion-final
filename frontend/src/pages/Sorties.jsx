@@ -70,6 +70,7 @@ const Sorties = () => {
         return d >= startOfDay && d < endOfDay;
       });
 
+      // Tri chronologique croissant pour numéroter correctement les tours
       allMovements.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
       const tourMap = {};
@@ -89,8 +90,7 @@ const Sorties = () => {
         return { ...m, tourNumber: null };
       });
 
-      movementsWithTour.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
+      // Enrichissement avec les noms des produits et coopérants
       const productIds = [...new Set(movementsWithTour.map(m => m.product_id).filter(Boolean))];
       const cooperantIds = [...new Set(movementsWithTour.map(m => m.cooperant_id).filter(Boolean))];
 
@@ -105,11 +105,40 @@ const Sorties = () => {
         sellersList.forEach(s => { if (s) sellersMap[s.id] = s; });
       }
 
+      // Enrichir les mouvements
       const enriched = movementsWithTour.map(m => ({
         ...m,
         product: productsMap[m.product_id] || null,
         cooperant: sellersMap[m.cooperant_id] || null,
       }));
+
+      // --- Calcul du stock après chaque mouvement ---
+      // Regrouper les mouvements par produit
+      const productMovementsMap = {};
+      enriched.forEach(m => {
+        if (!m.product_id) return;
+        if (!productMovementsMap[m.product_id]) productMovementsMap[m.product_id] = [];
+        productMovementsMap[m.product_id].push(m);
+      });
+
+      // Pour chaque produit, trier les mouvements du plus récent au plus ancien
+      // et calculer le stock après chaque mouvement
+      for (const [productId, movementsOfProduct] of Object.entries(productMovementsMap)) {
+        // Trier par date décroissante (le plus récent en premier)
+        movementsOfProduct.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        // Stock final du produit
+        const product = productsMap[productId];
+        let stock = product ? product.current_stock : 0;
+        // Parcourir du plus récent au plus ancien
+        movementsOfProduct.forEach(m => {
+          m.stockAfter = stock;
+          // Reculer d'un mouvement : le stock avant ce mouvement était stock - quantity_change
+          stock = stock - m.quantity_change;
+        });
+      }
+
+      // Remettre dans l'ordre décroissant pour l'affichage (plus récent en premier)
+      enriched.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
       setMovements(enriched);
       setMessage({ text: '', type: '' });
@@ -195,21 +224,18 @@ const Sorties = () => {
 
     const movement = editingMovement;
     const oldQty = Math.abs(movement.quantity_change);
-    const diff = newQty - oldQty; // positif => augmentation de la sortie (stock diminue), négatif => diminution
+    const diff = newQty - oldQty;
 
     setLoading(true);
     setMessage({ text: '', type: '' });
 
     try {
-      // 1. Récupérer le produit pour vérifier le stock
       const productId = movement.product_id;
       const { data: product, error: prodError } = await api.get(`/products/${productId}`);
       if (prodError) throw prodError;
       let currentStock = product.current_stock;
 
-      // 2. Calcul du nouveau stock
       if (movement.movement_type === 'cooperant_take' || movement.movement_type === 'retail_sale') {
-        // Sortie : si on augmente la quantité, le stock baisse ; si on diminue, le stock augmente
         if (diff > 0 && currentStock < diff) {
           setMessage({ text: '❌ Stock insuffisant pour cette augmentation', type: 'error' });
           setLoading(false);
@@ -217,7 +243,6 @@ const Sorties = () => {
         }
         currentStock -= diff;
       } else if (movement.movement_type === 'cooperant_return') {
-        // Entrée : si on augmente la quantité, le stock augmente ; si on diminue, le stock baisse
         currentStock += diff;
       } else {
         setMessage({ text: 'Type de mouvement non modifiable', type: 'error' });
@@ -225,10 +250,8 @@ const Sorties = () => {
         return;
       }
 
-      // 3. Mettre à jour le produit
       await api.put(`/products/${productId}`, { current_stock: currentStock });
 
-      // 4. Mettre à jour le mouvement dans Supabase
       const quantityChange = (movement.movement_type === 'cooperant_take' || movement.movement_type === 'retail_sale')
         ? -newQty
         : newQty;
@@ -237,7 +260,6 @@ const Sorties = () => {
         quantity_change: quantityChange
       });
 
-      // 5. Synchroniser Dexie et rafraîchir l'affichage
       await syncAll();
       await fetchData();
       await fetchMovements();
@@ -521,7 +543,7 @@ const Sorties = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {movements.map((m, idx) => {
+                  {movements.map(m => {
                     const product = m.product || {};
                     const cooperant = m.cooperant || {};
                     const qty = Math.abs(m.quantity_change);
@@ -546,17 +568,10 @@ const Sorties = () => {
                       tourDisplay = '';
                     }
 
-                    // Calcul du stock après ce mouvement
-                    // On part du stock final du produit (product.current_stock) et on soustrait les quantity_change des mouvements plus récents (index < idx)
-                    let stockAfter = '?';
-                    if (product.current_stock !== undefined && product.current_stock !== null) {
-                      const stockFinal = product.current_stock;
-                      const sumRecentChanges = movements.slice(0, idx).reduce((acc, m2) => acc - m2.quantity_change, 0);
-                      stockAfter = stockFinal - sumRecentChanges;
-                    }
-
-                    // Autoriser la modification pour tout sauf supplier_in
                     const canEdit = m.movement_type !== 'supplier_in';
+
+                    // Le stock après est maintenant stocké dans m.stockAfter
+                    const stockAfter = m.stockAfter !== undefined ? m.stockAfter : '?';
 
                     return (
                       <tr key={m.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
@@ -726,7 +741,6 @@ const Sorties = () => {
 
                           return [...rows, totalRow];
                         })}
-                        {/* Total général */}
                         <tr style={{ background: '#f3f4f6', fontWeight: 'bold', borderTop: '2px solid #1e3a8a' }}>
                           <td colSpan="5" style={{ padding: '0.5rem', textAlign: 'right' }}>TOTAL GÉNÉRAL</td>
                           <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>{totalGlobalNet}</td>
