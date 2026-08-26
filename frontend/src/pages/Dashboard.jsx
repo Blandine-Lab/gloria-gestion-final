@@ -143,6 +143,7 @@ const Dashboard = () => {
         operatorStats,
         alerts: alerts || [],
         products: products || [],
+        operators: operators || [], // Ajout des opérateurs pour afficher leur stock
         date: startOfDay.toISOString().split('T')[0]
       });
       setError(null);
@@ -207,6 +208,7 @@ const Dashboard = () => {
     operatorStats,
     alerts,
     products,
+    operators,
     date
   } = data;
 
@@ -230,6 +232,12 @@ const Dashboard = () => {
       }, 0)
     };
   }
+
+  // Totaux des stocks des opérateurs
+  const totalMegasStock = operators.reduce((sum, op) => sum + (op.stock_megas || 0), 0);
+  const totalUnitesStock = operators.reduce((sum, op) => sum + (op.stock_unites || 0), 0);
+  const totalFCStock = operators.reduce((sum, op) => sum + (op.stock_fc || 0), 0);
+  const totalUSDStock = operators.reduce((sum, op) => sum + (op.stock_usd || 0), 0);
 
   return (
     <div style={{ padding: '2rem', background: '#f4f6f9', minHeight: '100vh' }}>
@@ -382,7 +390,7 @@ const Dashboard = () => {
         )}
       </div>
 
-      {/* Stock détaillé par produit */}
+      {/* Stock détaillé par produit (inchangé) */}
       <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
         <h3 style={{ marginTop: 0, color: '#1f2937' }}>📦 Stock détaillé par produit</h3>
         {Object.keys(sizeTotals).length > 0 && (
@@ -435,7 +443,55 @@ const Dashboard = () => {
         )}
       </div>
 
-      {/* Alertes de stock */}
+      {/* === NOUVEAU : Stock détaillé des opérateurs (mégas, unités, FC, USD) === */}
+      <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
+        <h3 style={{ marginTop: 0, color: '#1f2937' }}>📱 Stock des opérateurs (Mégas, Unités, FC, USD)</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1rem' }}>
+          <div style={{ background: '#f3f4f6', padding: '0.5rem 1rem', borderRadius: '0.5rem' }}>
+            <strong>Mégas</strong> : {totalMegasStock}
+          </div>
+          <div style={{ background: '#f3f4f6', padding: '0.5rem 1rem', borderRadius: '0.5rem' }}>
+            <strong>Unités</strong> : {totalUnitesStock}
+          </div>
+          <div style={{ background: '#f3f4f6', padding: '0.5rem 1rem', borderRadius: '0.5rem' }}>
+            <strong>FC</strong> : {totalFCStock}
+          </div>
+          <div style={{ background: '#f3f4f6', padding: '0.5rem 1rem', borderRadius: '0.5rem' }}>
+            <strong>USD</strong> : {totalUSDStock}
+          </div>
+        </div>
+
+        {operators && operators.length === 0 ? (
+          <p style={{ color: '#6b7280' }}>Aucun opérateur enregistré.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: '#f3f4f6', textAlign: 'left' }}>
+                  <th style={{ padding: '0.5rem', color: '#1f2937' }}>Opérateur</th>
+                  <th style={{ padding: '0.5rem', textAlign: 'center', color: '#1f2937' }}>Mégas</th>
+                  <th style={{ padding: '0.5rem', textAlign: 'center', color: '#1f2937' }}>Unités</th>
+                  <th style={{ padding: '0.5rem', textAlign: 'center', color: '#1f2937' }}>FC</th>
+                  <th style={{ padding: '0.5rem', textAlign: 'center', color: '#1f2937' }}>USD</th>
+                </tr>
+              </thead>
+              <tbody>
+                {operators.map((op, idx) => (
+                  <tr key={op.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                    <td style={{ padding: '0.5rem', color: '#1f2937' }}>{op.name}</td>
+                    <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1f2937' }}>{op.stock_megas || 0}</td>
+                    <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1f2937' }}>{op.stock_unites || 0}</td>
+                    <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1f2937' }}>{op.stock_fc || 0}</td>
+                    <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1f2937' }}>{op.stock_usd || 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Alertes de stock (inchangé) */}
       <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#1f2937' }}>
           ⚠️ Alertes de stock
