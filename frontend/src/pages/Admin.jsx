@@ -99,11 +99,10 @@ const Admin = () => {
       fetchProducts(),
       fetchOperators(),
       fetchClients(),
-      fetchUsers(), // toujours via API pour les utilisateurs
+      fetchUsers(),
     ]);
   };
 
-  // Lecture des coopérants depuis Dexie
   const fetchSellers = async () => {
     try {
       const data = await db.sellers.toArray();
@@ -113,7 +112,6 @@ const Admin = () => {
     }
   };
 
-  // Lecture des produits depuis Dexie
   const fetchProducts = async () => {
     try {
       const data = await db.products.toArray();
@@ -123,7 +121,6 @@ const Admin = () => {
     }
   };
 
-  // Lecture des opérateurs depuis Dexie
   const fetchOperators = async () => {
     try {
       const data = await db.operators.toArray();
@@ -134,7 +131,6 @@ const Admin = () => {
     }
   };
 
-  // Lecture des clients depuis Dexie
   const fetchClients = async () => {
     try {
       const data = await db.clients.toArray();
@@ -144,7 +140,6 @@ const Admin = () => {
     }
   };
 
-  // Lecture des utilisateurs via l'API (car Dexie n'a peut-être pas de table "users")
   const fetchUsers = async () => {
     try {
       const response = await api.get('/users');
@@ -169,13 +164,10 @@ const Admin = () => {
     try {
       const { data, error } = await supabase.from('sellers').insert([newSeller]).select();
       if (error) throw error;
-      // Mettre à jour l'état local
       setSellers([...sellers, data[0]]);
       setNewSeller({ name: '', email: '', phone: '' });
       setMessage({ text: '✅ Coopérant ajouté', type: 'success' });
-      // Synchroniser Dexie en arrière-plan
       await syncAll();
-      // Recharger depuis Dexie pour être cohérent
       await fetchSellers();
     } catch (error) {
       setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
@@ -432,7 +424,7 @@ const Admin = () => {
   };
 
   // =============================================
-  // GESTION DES UTILISATEURS (inchangée)
+  // GESTION DES UTILISATEURS
   // =============================================
   const openUserModal = (user = null) => {
     if (user) {
@@ -570,9 +562,7 @@ const Admin = () => {
         </div>
       )}
 
-      {/* ============================================
-          SECTION : Gestion des utilisateurs
-          ============================================ */}
+      {/* SECTION : Gestion des utilisateurs */}
       <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0 }}>👥 Gestion des utilisateurs</h3>
@@ -737,9 +727,7 @@ const Admin = () => {
         )}
       </div>
 
-      {/* ============================================
-          LIGNE 1 : Coopérants et Produits
-          ============================================ */}
+      {/* LIGNE 1 : Coopérants et Produits */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '2rem', marginBottom: '2rem' }}>
         {/* Ajouter un coopérant */}
         <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
@@ -880,9 +868,7 @@ const Admin = () => {
         </div>
       </div>
 
-      {/* ============================================
-          LIGNE 2 : Opérateurs et Clients
-          ============================================ */}
+      {/* LIGNE 2 : Opérateurs et Clients */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '2rem', marginBottom: '2rem' }}>
         {/* Opérateurs */}
         <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
@@ -1086,9 +1072,7 @@ const Admin = () => {
         </div>
       </div>
 
-      {/* ============================================
-          LISTE DES COOPÉRANTS
-          ============================================ */}
+      {/* LISTE DES COOPÉRANTS */}
       <div style={{ marginTop: '2rem', background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <h3>👥 Coopérants</h3>
         {sellers.length === 0 ? (
@@ -1121,9 +1105,7 @@ const Admin = () => {
         )}
       </div>
 
-      {/* ============================================
-          LISTE DES PRODUITS
-          ============================================ */}
+      {/* LISTE DES PRODUITS */}
       <div style={{ marginTop: '2rem', background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <h3>🧃 Produits</h3>
         {products.length === 0 ? (
