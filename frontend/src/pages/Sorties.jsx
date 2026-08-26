@@ -521,7 +521,7 @@ const Sorties = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {movements.map(m => {
+                  {movements.map((m, idx) => {
                     const product = m.product || {};
                     const cooperant = m.cooperant || {};
                     const qty = Math.abs(m.quantity_change);
@@ -546,6 +546,15 @@ const Sorties = () => {
                       tourDisplay = '';
                     }
 
+                    // Calcul du stock après ce mouvement
+                    // On part du stock final du produit (product.current_stock) et on soustrait les quantity_change des mouvements plus récents (index < idx)
+                    let stockAfter = '?';
+                    if (product.current_stock !== undefined && product.current_stock !== null) {
+                      const stockFinal = product.current_stock;
+                      const sumRecentChanges = movements.slice(0, idx).reduce((acc, m2) => acc - m2.quantity_change, 0);
+                      stockAfter = stockFinal - sumRecentChanges;
+                    }
+
                     // Autoriser la modification pour tout sauf supplier_in
                     const canEdit = m.movement_type !== 'supplier_in';
 
@@ -563,7 +572,7 @@ const Sorties = () => {
                         <td style={{ padding: '0.75rem', fontWeight: 'bold' }}>
                           {amount > 0 ? `${amount.toFixed(0)} FC` : '-'}
                         </td>
-                        <td style={{ padding: '0.75rem' }}>{product.current_stock ?? '?'}</td>
+                        <td style={{ padding: '0.75rem' }}>{stockAfter}</td>
                         <td style={{ padding: '0.75rem', textAlign: 'center' }}>
                           {canEdit && (
                             <button
