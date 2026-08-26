@@ -248,7 +248,7 @@ const Sorties = () => {
           take: 0,
           retour: 0,
           net: 0,
-          unitPrice: m.product?.unit_price || 0, // Ajout du prix unitaire
+          unitPrice: m.product?.unit_price || 0,
         };
       }
       const qty = Math.abs(m.quantity_change);
@@ -537,16 +537,41 @@ const Sorties = () => {
               );
             })()}
 
-            {/* --- Récapitulatif par tour AVEC MONTANT --- */}
+            {/* --- Récapitulatif par tour AVEC TOTAUX PAR TOUR --- */}
             {(() => {
               const toursSummary = getToursSummary();
               if (toursSummary.length === 0) return null;
 
-              // Calcul du total général des montants
-              let totalMontant = 0;
+              // Grouper par (cooperant, tour)
+              const groups = [];
+              let currentGroup = null;
+              let groupItems = [];
+
               toursSummary.forEach(item => {
-                totalMontant += item.net * item.unitPrice;
+                const key = `${item.cooperantName}|${item.tour}`;
+                if (!currentGroup || currentGroup.key !== key) {
+                  if (currentGroup) {
+                    groups.push({ ...currentGroup, items: groupItems });
+                  }
+                  currentGroup = { key, cooperantName: item.cooperantName, tour: item.tour };
+                  groupItems = [];
+                }
+                groupItems.push(item);
               });
+              if (currentGroup) {
+                groups.push({ ...currentGroup, items: groupItems });
+              }
+
+              // Calcul des totaux par groupe
+              groups.forEach(group => {
+                group.totalTake = group.items.reduce((acc, item) => acc + item.take, 0);
+                group.totalRetour = group.items.reduce((acc, item) => acc + item.retour, 0);
+                group.totalNet = group.items.reduce((acc, item) => acc + item.net, 0);
+                group.totalMontant = group.items.reduce((acc, item) => acc + (item.net * item.unitPrice), 0);
+              });
+
+              const totalGlobalNet = groups.reduce((acc, g) => acc + g.totalNet, 0);
+              const totalGlobalMontant = groups.reduce((acc, g) => acc + g.totalMontant, 0);
 
               return (
                 <div style={{ marginTop: '1.5rem', borderTop: '2px solid #e5e7eb', paddingTop: '1rem' }}>
@@ -565,31 +590,38 @@ const Sorties = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {toursSummary.map((item, index) => {
-                          const montant = item.net * item.unitPrice;
-                          return (
-                            <tr key={index} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                              <td style={{ padding: '0.5rem' }}>{item.cooperantName}</td>
+                        {groups.map((group, idx) => {
+                          const rows = group.items.map((item, i) => (
+                            <tr key={`${group.key}-${i}`} style={{ borderBottom: i === group.items.length - 1 ? 'none' : '1px solid #e5e7eb' }}>
+                              <td style={{ padding: '0.5rem' }}>{i === 0 ? group.cooperantName : ''}</td>
                               <td style={{ padding: '0.5rem' }}>{item.productName}</td>
-                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.tour}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{i === 0 ? group.tour : ''}</td>
                               <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.take}</td>
                               <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.retour}</td>
                               <td style={{ padding: '0.5rem', textAlign: 'center', fontWeight: 'bold' }}>{item.net}</td>
                               <td style={{ padding: '0.5rem', textAlign: 'center', fontWeight: 'bold' }}>
-                                {montant > 0 ? `${montant.toFixed(0)} FC` : '0 FC'}
+                                {item.net * item.unitPrice > 0 ? `${(item.net * item.unitPrice).toFixed(0)} FC` : '0 FC'}
                               </td>
                             </tr>
+                          ));
+
+                          const totalRow = (
+                            <tr key={`total-${group.key}`} style={{ background: '#f0fdf4', fontWeight: 'bold', borderBottom: '2px solid #22c55e' }}>
+                              <td style={{ padding: '0.5rem' }} colSpan="3" style={{ textAlign: 'right' }}>Total tour {group.tour}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{group.totalTake}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{group.totalRetour}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{group.totalNet}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{group.totalMontant.toFixed(0)} FC</td>
+                            </tr>
                           );
+
+                          return [...rows, totalRow];
                         })}
-                        {/* Ligne de total */}
+                        {/* Total général */}
                         <tr style={{ background: '#f3f4f6', fontWeight: 'bold', borderTop: '2px solid #1e3a8a' }}>
                           <td colSpan="5" style={{ padding: '0.5rem', textAlign: 'right' }}>TOTAL GÉNÉRAL</td>
-                          <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>
-                            {toursSummary.reduce((acc, item) => acc + item.net, 0)}
-                          </td>
-                          <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>
-                            {totalMontant.toFixed(0)} FC
-                          </td>
+                          <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>{totalGlobalNet}</td>
+                          <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>{totalGlobalMontant.toFixed(0)} FC</td>
                         </tr>
                       </tbody>
                     </table>
