@@ -68,18 +68,33 @@ const Parametres = () => {
     setError(null);
     setSuccess(false);
     try {
+      // Préparer les données : convertir les prix décimaux (avec virgule) en nombres
+      const processedSettings = { ...settings };
+      // Champs numériques
+      const numericFields = ['mega_price', 'unite_price', 'default_vat', 'default_reorder_level', 'default_unit_price'];
+      numericFields.forEach(field => {
+        if (processedSettings[field] !== undefined && processedSettings[field] !== '') {
+          const value = processedSettings[field];
+          // Remplacer la virgule par un point et convertir en nombre
+          const normalized = typeof value === 'string' ? value.replace(',', '.') : value;
+          const num = parseFloat(normalized);
+          if (!isNaN(num)) {
+            processedSettings[field] = num;
+          }
+        }
+      });
+
       // 1. Sauvegarder localement dans Dexie
       await db.settings.clear();
       await db.settings.bulkPut(
-        Object.entries(settings).map(([key, value]) => ({ key, value }))
+        Object.entries(processedSettings).map(([key, value]) => ({ key, value }))
       );
 
       // 2. Si connecté, envoyer au serveur
       if (navigator.onLine) {
-        for (const [key, value] of Object.entries(settings)) {
+        for (const [key, value] of Object.entries(processedSettings)) {
           await api.put(`/settings/${key}`, { value });
         }
-        // Synchroniser les autres données (au cas où)
         await syncAll();
         setSuccess(true);
         setTimeout(() => setSuccess(false), 3000);
@@ -135,6 +150,7 @@ const Parametres = () => {
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Devise</label>
               <input
@@ -144,6 +160,7 @@ const Parametres = () => {
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Symbole de la devise</label>
               <input
@@ -153,6 +170,7 @@ const Parametres = () => {
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Email de contact</label>
               <input
@@ -162,6 +180,7 @@ const Parametres = () => {
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Téléphone de contact</label>
               <input
@@ -171,6 +190,7 @@ const Parametres = () => {
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Adresse</label>
               <input
@@ -180,34 +200,60 @@ const Parametres = () => {
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>TVA par défaut (%)</label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
                 value={settings.default_vat || '0'}
                 onChange={(e) => handleChange('default_vat', e.target.value)}
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Seuil d'alerte de stock (par défaut)</label>
               <input
-                type="number"
+                type="text"
                 value={settings.default_reorder_level || '10'}
                 onChange={(e) => handleChange('default_reorder_level', e.target.value)}
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
+            {/* NOUVEAUX CHAMPS POUR LES PRIX DES MÉGAS ET UNITÉS */}
+            <div>
+              <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Prix d'un méga (FC)</label>
+              <input
+                type="text"
+                value={settings.mega_price || ''}
+                onChange={(e) => handleChange('mega_price', e.target.value)}
+                placeholder="Ex: 1000 ou 11.25"
+                style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Prix d'une unité (FC)</label>
+              <input
+                type="text"
+                value={settings.unite_price || ''}
+                onChange={(e) => handleChange('unite_price', e.target.value)}
+                placeholder="Ex: 500 ou 11.25"
+                style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
+              />
+            </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Prix unitaire par défaut (mégas/unités)</label>
               <input
-                type="number"
+                type="text"
                 value={settings.default_unit_price || '500'}
                 onChange={(e) => handleChange('default_unit_price', e.target.value)}
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
+
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>URL du logo</label>
               <input
