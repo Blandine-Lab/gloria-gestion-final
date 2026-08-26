@@ -17,7 +17,6 @@ const Parametres = () => {
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      // 1. Lire depuis Dexie (si disponible)
       const localSettings = await db.settings.toArray();
       if (localSettings.length > 0) {
         const settingsObj = {};
@@ -28,7 +27,6 @@ const Parametres = () => {
         setError(null);
       }
 
-      // 2. Si connecté, rafraîchir depuis le serveur
       if (navigator.onLine) {
         const response = await api.get('/settings');
         if (response.data.success) {
@@ -36,9 +34,7 @@ const Parametres = () => {
           response.data.data.forEach(s => {
             serverSettings[s.key] = s.value;
           });
-          // Mettre à jour l'état
           setSettings(serverSettings);
-          // Mettre à jour Dexie
           await db.settings.clear();
           await db.settings.bulkPut(
             Object.entries(serverSettings).map(([key, value]) => ({ key, value }))
@@ -50,7 +46,6 @@ const Parametres = () => {
       }
     } catch (err) {
       console.error(err);
-      // Si on n'a pas de données locales, on affiche une erreur
       if (Object.keys(settings).length === 0) {
         setError('Impossible de charger les paramètres');
       }
@@ -68,14 +63,11 @@ const Parametres = () => {
     setError(null);
     setSuccess(false);
     try {
-      // Préparer les données : convertir les prix décimaux (avec virgule) en nombres
       const processedSettings = { ...settings };
-      // Champs numériques
       const numericFields = ['mega_price', 'unite_price', 'default_vat', 'default_reorder_level', 'default_unit_price'];
       numericFields.forEach(field => {
         if (processedSettings[field] !== undefined && processedSettings[field] !== '') {
           const value = processedSettings[field];
-          // Remplacer la virgule par un point et convertir en nombre
           const normalized = typeof value === 'string' ? value.replace(',', '.') : value;
           const num = parseFloat(normalized);
           if (!isNaN(num)) {
@@ -84,13 +76,11 @@ const Parametres = () => {
         }
       });
 
-      // 1. Sauvegarder localement dans Dexie
       await db.settings.clear();
       await db.settings.bulkPut(
         Object.entries(processedSettings).map(([key, value]) => ({ key, value }))
       );
 
-      // 2. Si connecté, envoyer au serveur
       if (navigator.onLine) {
         for (const [key, value] of Object.entries(processedSettings)) {
           await api.put(`/settings/${key}`, { value });
@@ -221,7 +211,6 @@ const Parametres = () => {
               />
             </div>
 
-            {/* NOUVEAUX CHAMPS POUR LES PRIX DES MÉGAS ET UNITÉS */}
             <div>
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Prix d'un méga (FC)</label>
               <input
@@ -248,8 +237,9 @@ const Parametres = () => {
               <label style={{ display: 'block', fontWeight: 'bold', color: '#1e3a8a', marginBottom: '0.2rem' }}>Prix unitaire par défaut (mégas/unités)</label>
               <input
                 type="text"
-                value={settings.default_unit_price || '500'}
+                value={settings.default_unit_price || ''}
                 onChange={(e) => handleChange('default_unit_price', e.target.value)}
+                placeholder="Ex: 500 ou 50.25"
                 style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', border: '2px solid #d1d5db', background: '#f9fafb', color: '#1f2937', fontSize: '1rem' }}
               />
             </div>
