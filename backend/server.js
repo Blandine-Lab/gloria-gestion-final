@@ -1,488 +1,924 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import api from '../services/api';
-import db from '../db';
-import { syncAll } from '../services/syncService';
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { createClient } from '@supabase/supabase-js';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import WebSocket from 'ws';
 
-// Fonction pour obtenir le nom court (sans "Money" / "M-Pesa") pour les mégas/unités
-const getShortName = (fullName) => {
-  const map = {
-    'Vodacom M-Pesa': 'Vodacom',
-    'Airtel Money': 'Airtel',
-    'Orange Money': 'Orange',
-    'Africell Money': 'Africell'
-  };
-  return map[fullName] || fullName;
-};
+dotenv.config();
 
-const OperatorSales = () => {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const [operator, setOperator] = useState(null);
-  const [clients, setClients] = useState([]);
-  const [sales, setSales] = useState([]);
-  const [settings, setSettings] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('megas');
-  const [stock, setStock] = useState({ stock_megas: 0, stock_unites: 0 });
-  const [formData, setFormData] = useState({
-    client_id: '',
-    amount: '',
-    quantity: '',
-    payment_method: 'cash',
-    note: '',
-    operation_type: 'send',
-    phone_number: '',
-    beneficiary_phone: '',
-    beneficiary_name: '',
-    confirmation_code: ''
-  });
-  const [message, setMessage] = useState({ text: '', type: '' });
-  const [saving, setSaving] = useState(false);
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-  useEffect(() => {
-    fetchData();
-  }, [id]);
+// Route de test
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'Backend OK' });
+});
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
+console.log('🔍 Démarrage du backend...');
+console.log('🔑 VITE_SUPABASE_URL:', process.env.VITE_SUPABASE_URL ? 'défini' : 'NON DÉFINI');
+console.log('🔑 SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'défini' : 'NON DÉFINI');
+console.log('🔑 JWT_SECRET:', process.env.JWT_SECRET ? 'défini' : 'NON DÉFINI');
 
-      const op = await db.operators.get(id);
-      if (!op) {
-        throw new Error('Opérateur introuvable');
+// Client Supabase
+const supabase = createClient(
+  process.env.VITE_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    realtime: {
+      transport: WebSocket,
+    },
+  }
+);
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your_secret_key_here';
+
+// =============================================
+// ROUTE 1 : Statistiques du tableau de bord
+// =============================================
+app.get('/api/dashboard/stats', async (req, res) => {
+  try {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const startISO = startOfDay.toISOString();
+    const endISO = endOfDay.toISOString();
+
+    const { data: juiceSales, error: juiceError } = await supabase
+      .from('stock_movements')
+      .select(`
+        quantity_change,
+        cooperant_id,
+        movement_type,
+        product_id,
+        products(name, size, unit_price)
+      `)
+      .gte('created_at', startISO)
+      .lt('created_at', endISO)
+      .in('movement_type', ['cooperant_take', 'cooperant_return', 'retail_sale']);
+
+    if (juiceError) throw juiceError;
+
+    const cooperantMap = {};
+    const productNetMap = {};
+    let totalRetail = 0;
+    let totalRetailAmount = 0;
+
+    juiceSales.forEach(mov => {
+      const product = mov.products || {};
+      const unitPrice = product.unit_price || 0;
+      const absQty = Math.abs(mov.quantity_change);
+      const productId = mov.product_id;
+      const cooperantId = mov.cooperant_id;
+
+      if (mov.movement_type === 'cooperant_take') {
+        if (!cooperantMap[cooperantId]) {
+          cooperantMap[cooperantId] = { totalTake: 0, totalReturn: 0 };
+        }
+        cooperantMap[cooperantId].totalTake += absQty;
+        const key = `${cooperantId}|${productId}`;
+        if (!productNetMap[key]) {
+          productNetMap[key] = { cooperantId, productId, unitPrice, netQty: 0 };
+        }
+        productNetMap[key].netQty += absQty;
+      } else if (mov.movement_type === 'cooperant_return') {
+        if (!cooperantMap[cooperantId]) {
+          cooperantMap[cooperantId] = { totalTake: 0, totalReturn: 0 };
+        }
+        cooperantMap[cooperantId].totalReturn += absQty;
+        const key = `${cooperantId}|${productId}`;
+        if (!productNetMap[key]) {
+          productNetMap[key] = { cooperantId, productId, unitPrice, netQty: 0 };
+        }
+        productNetMap[key].netQty -= absQty;
+      } else if (mov.movement_type === 'retail_sale') {
+        totalRetail += absQty;
+        totalRetailAmount += absQty * unitPrice;
       }
-      setOperator(op);
-      setStock({ stock_megas: op.stock_megas || 0, stock_unites: op.stock_unites || 0 });
+    });
 
-      const clientsData = await db.clients.toArray();
-      setClients(clientsData || []);
-
-      const settingsData = await db.settings.toArray();
-      const settingsObj = {};
-      settingsData.forEach(s => { settingsObj[s.key] = s.value; });
-      setSettings(settingsObj);
-
-      const today = new Date();
-      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
-
-      const allSales = await db.sales.toArray();
-      const filteredSales = allSales.filter(s => {
-        const saleDate = new Date(s.sale_date);
-        return saleDate >= startOfDay && saleDate < endOfDay && s.operator_id === id;
-      });
-      filteredSales.sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date));
-      setSales(filteredSales);
-
-      setMessage({ text: '', type: '' });
-    } catch (error) {
-      console.error('Erreur chargement:', error);
-      setMessage({ text: 'Erreur de chargement des données', type: 'error' });
-    } finally {
-      setLoading(false);
+    const cooperantAmounts = {};
+    for (const key in productNetMap) {
+      const data = productNetMap[key];
+      const amount = data.netQty * data.unitPrice;
+      if (!cooperantAmounts[data.cooperantId]) cooperantAmounts[data.cooperantId] = 0;
+      cooperantAmounts[data.cooperantId] += amount;
     }
-  };
 
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
+    let totalCooperantNet = 0;
+    let totalCooperantAmount = 0;
+    const cooperantSales = [];
+    for (const [cooperantId, data] of Object.entries(cooperantMap)) {
+      const netSold = data.totalTake - data.totalReturn;
+      if (netSold > 0) {
+        totalCooperantNet += netSold;
+        const amount = cooperantAmounts[cooperantId] || 0;
+        totalCooperantAmount += amount;
+        const { data: seller } = await supabase
+          .from('sellers')
+          .select('name')
+          .eq('id', cooperantId)
+          .single();
+        cooperantSales.push({
+          cooperantId,
+          name: seller?.name || 'Inconnu',
+          netSold,
+          amount: amount
+        });
+      }
+    }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (activeTab === 'emoney') {
-      if (!formData.client_id || !formData.amount || parseFloat(formData.amount) <= 0) {
-        setMessage({ text: 'Veuillez remplir tous les champs obligatoires', type: 'error' });
-        return;
+    const { data: creditSales, error: creditError } = await supabase
+      .from('sales')
+      .select('total_amount, payment_method, operator_id, sale_type, operators(name)')
+      .gte('sale_date', startISO)
+      .lt('sale_date', endISO)
+      .in('payment_method', ['emoney', 'credit']);
+
+    if (creditError) throw creditError;
+
+    let totalEMoney = 0;
+    let totalMegas = 0;
+    let totalUnites = 0;
+    const operatorStats = {};
+    const typeStats = { megas: 0, unites: 0, emoney: 0 };
+
+    creditSales.forEach(sale => {
+      const amount = sale.total_amount;
+      const opName = sale.operators?.name || 'Autre';
+      const type = sale.sale_type || 'emoney';
+
+      if (type === 'megas') totalMegas += amount;
+      else if (type === 'unites') totalUnites += amount;
+      else totalEMoney += amount;
+
+      typeStats[type] = (typeStats[type] || 0) + amount;
+      operatorStats[opName] = (operatorStats[opName] || 0) + amount;
+    });
+
+    const { data: allProducts, error: productError } = await supabase
+      .from('products')
+      .select('id, name, current_stock, reorder_level, size, bottles_per_pack')
+      .order('name');
+
+    if (productError) throw productError;
+
+    const alerts = allProducts.filter(p => p.current_stock <= p.reorder_level);
+    const totalStockBottles = allProducts.reduce((sum, p) => sum + p.current_stock, 0);
+    const totalStockPackets = allProducts.reduce((sum, p) => {
+      const bottlesPerPack = p.bottles_per_pack || 12;
+      return sum + Math.floor(p.current_stock / bottlesPerPack);
+    }, 0);
+
+    const totalJuiceSold = totalCooperantNet + totalRetail;
+    const totalJuiceAmount = totalCooperantAmount + totalRetailAmount;
+
+    res.json({
+      success: true,
+      data: {
+        totalJuiceSold,
+        totalCooperantNet,
+        totalRetail,
+        totalEMoney,
+        totalMegas,
+        totalUnites,
+        typeStats,
+        totalJuiceAmount,
+        totalStockBottles,
+        totalStockPackets,
+        cooperantSales: cooperantSales.sort((a, b) => b.netSold - a.netSold),
+        operatorStats,
+        alerts: alerts || [],
+        products: allProducts || [],
+        date: startOfDay.toISOString().split('T')[0]
       }
-      if (!formData.confirmation_code) {
-        setMessage({ text: 'Le code de confirmation est obligatoire', type: 'error' });
-        return;
+    });
+
+  } catch (error) {
+    console.error('Erreur dashboard:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 2 : Enregistrer un mouvement de stock (AVEC LOGIQUE DE TOUR)
+// =============================================
+app.post('/api/movement', async (req, res) => {
+  try {
+    const { product_id, quantity, movement_type, cooperant_id, reference_id, reason } = req.body;
+
+    if (!product_id || !quantity || !movement_type) {
+      return res.status(400).json({ success: false, error: 'Champs requis manquants' });
+    }
+
+    // Récupérer le produit pour vérifier le stock
+    const { data: product, error: productError } = await supabase
+      .from('products')
+      .select('current_stock')
+      .eq('id', product_id)
+      .single();
+
+    if (productError) throw productError;
+
+    let newStock = product.current_stock;
+    let quantityChange;
+
+    // Calcul du changement de stock et validation
+    if (movement_type === 'cooperant_take' || movement_type === 'retail_sale') {
+      if (product.current_stock < quantity) {
+        return res.status(400).json({ success: false, error: 'Stock insuffisant' });
       }
+      newStock = product.current_stock - quantity;
+      quantityChange = -quantity;
+    } else if (movement_type === 'cooperant_return' || movement_type === 'supplier_in') {
+      newStock = product.current_stock + quantity;
+      quantityChange = quantity;
     } else {
-      if (!formData.client_id || !formData.quantity || parseInt(formData.quantity) <= 0) {
-        setMessage({ text: 'Veuillez remplir la quantité correctement', type: 'error' });
-        return;
-      }
+      return res.status(400).json({ success: false, error: 'Type de mouvement invalide' });
     }
 
-    setSaving(true);
-    try {
-      const saleData = {
-        operator_id: id,
-        client_id: formData.client_id,
-        payment_method: formData.payment_method,
-        note: formData.note,
-        sale_type: activeTab,
+    // Mise à jour du stock produit
+    const { error: updateError } = await supabase
+      .from('products')
+      .update({ current_stock: newStock })
+      .eq('id', product_id);
+
+    if (updateError) throw updateError;
+
+    // --- Calcul du tour_number ---
+    let tourNumber = null;
+    if (movement_type === 'cooperant_take') {
+      // Récupérer le dernier tour pour ce couple (cooperant_id, product_id)
+      const { data: lastTake, error: takeError } = await supabase
+        .from('stock_movements')
+        .select('tour_number')
+        .eq('cooperant_id', cooperant_id)
+        .eq('product_id', product_id)
+        .eq('movement_type', 'cooperant_take')
+        .order('tour_number', { ascending: false })
+        .limit(1);
+
+      if (takeError) throw takeError;
+      const lastTour = lastTake && lastTake.length > 0 ? lastTake[0].tour_number : 0;
+      tourNumber = lastTour + 1;
+    } else if (movement_type === 'cooperant_return') {
+      // Récupérer le dernier tour d'une prise pour ce couple
+      const { data: lastTake, error: takeError } = await supabase
+        .from('stock_movements')
+        .select('tour_number')
+        .eq('cooperant_id', cooperant_id)
+        .eq('product_id', product_id)
+        .eq('movement_type', 'cooperant_take')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (takeError) throw takeError;
+      tourNumber = lastTake && lastTake.length > 0 ? lastTake[0].tour_number : 0;
+    }
+    // Pour retail_sale, supplier_in, on laisse null
+
+    // Insertion du mouvement avec le tour_number
+    const { data: movement, error: moveError } = await supabase
+      .from('stock_movements')
+      .insert({
+        product_id,
+        quantity_change: quantityChange,
+        movement_type,
+        cooperant_id: cooperant_id || null,
+        reference_id: reference_id || null,
+        reason: reason || '',
+        tour_number: tourNumber
+      })
+      .select()
+      .single();
+
+    if (moveError) throw moveError;
+
+    res.json({ success: true, data: movement });
+  } catch (error) {
+    console.error('Erreur mouvement:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 2b : Récupérer un produit par ID
+// =============================================
+app.get('/api/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur récupération produit:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 2c : Mettre à jour un mouvement
+// =============================================
+app.put('/api/movement/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { quantity_change } = req.body;
+
+    if (quantity_change === undefined) {
+      return res.status(400).json({ success: false, error: 'La quantité change est requise' });
+    }
+
+    const { data, error } = await supabase
+      .from('stock_movements')
+      .update({ quantity_change })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur mise à jour mouvement:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 2d : Mettre à jour le stock d'un produit (NOUVEAU)
+// =============================================
+app.put('/api/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { current_stock } = req.body;
+
+    if (current_stock === undefined) {
+      return res.status(400).json({ success: false, error: 'current_stock est requis' });
+    }
+
+    const { data, error } = await supabase
+      .from('products')
+      .update({ current_stock })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur mise à jour produit:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 3 : Récupérer les mouvements avec filtres
+// =============================================
+app.get('/api/movements', async (req, res) => {
+  try {
+    const { cooperant_id, start_date, end_date, movement_type } = req.query;
+
+    let query = supabase
+      .from('stock_movements')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (cooperant_id) {
+      query = query.eq('cooperant_id', cooperant_id);
+    }
+    if (movement_type) {
+      query = query.eq('movement_type', movement_type);
+    }
+    if (start_date) {
+      query = query.gte('created_at', `${start_date}T00:00:00`);
+    }
+    if (end_date) {
+      query = query.lte('created_at', `${end_date}T23:59:59`);
+    }
+
+    const { data: movements, error } = await query;
+    if (error) throw error;
+
+    const productIds = [...new Set(movements.map(m => m.product_id).filter(Boolean))];
+    const cooperantIds = [...new Set(movements.map(m => m.cooperant_id).filter(Boolean))];
+
+    const [productsRes, sellersRes] = await Promise.all([
+      productIds.length ? supabase.from('products').select('id, name, size, unit_price').in('id', productIds) : { data: [] },
+      cooperantIds.length ? supabase.from('sellers').select('id, name').in('id', cooperantIds) : { data: [] }
+    ]);
+
+    const productMap = Object.fromEntries((productsRes.data || []).map(p => [p.id, p]));
+    const sellerMap = Object.fromEntries((sellersRes.data || []).map(s => [s.id, s]));
+
+    const result = movements.map(m => ({
+      ...m,
+      product: productMap[m.product_id] || null,
+      cooperant: sellerMap[m.cooperant_id] || null
+    }));
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Erreur récupération mouvements:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 4 : Suivi journalier des stocks
+// =============================================
+app.get('/api/stock/daily', async (req, res) => {
+  try {
+    const now = new Date();
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    const startISO = start.toISOString();
+    const endISO = end.toISOString();
+
+    const { data: products, error: productError } = await supabase
+      .from('products')
+      .select('id, name, current_stock, reorder_level, size, bottles_per_pack');
+
+    if (productError) throw productError;
+
+    const { data: movements, error: moveError } = await supabase
+      .from('stock_movements')
+      .select('product_id, quantity_change, movement_type, created_at')
+      .gte('created_at', startISO)
+      .lt('created_at', endISO);
+
+    if (moveError) throw moveError;
+
+    const productStats = {};
+    products.forEach(p => {
+      productStats[p.id] = {
+        id: p.id,
+        name: p.name,
+        current_stock: p.current_stock,
+        reorder_level: p.reorder_level,
+        size: p.size,
+        bottles_per_pack: p.bottles_per_pack || 12,
+        entries: 0,
+        exits: 0,
       };
+    });
 
-      if (activeTab === 'emoney') {
-        saleData.total_amount = parseFloat(formData.amount);
-        saleData.operation_type = formData.operation_type;
-        saleData.phone_number = formData.phone_number;
-        saleData.beneficiary_phone = formData.beneficiary_phone;
-        saleData.beneficiary_name = formData.beneficiary_name;
-        saleData.confirmation_code = formData.confirmation_code;
-      } else {
-        const unitPrice = activeTab === 'megas'
-          ? parseFloat(settings.mega_price) || parseFloat(settings.default_unit_price) || 500
-          : parseFloat(settings.unite_price) || parseFloat(settings.default_unit_price) || 500;
+    movements.forEach(m => {
+      const pid = m.product_id;
+      if (!productStats[pid]) return;
+      const qty = Math.abs(m.quantity_change);
+      const type = m.movement_type;
 
-        const quantity = parseInt(formData.quantity);
-        saleData.total_amount = quantity * unitPrice;
-        saleData.quantity = quantity;
-        const field = activeTab === 'megas' ? 'stock_megas' : 'stock_unites';
-        const currentStock = stock[field];
-        if (currentStock < quantity) {
-          setMessage({ text: 'Stock insuffisant', type: 'error' });
-          setSaving(false);
-          return;
-        }
-
-        // ✅ CORRECTION : supprimer le "/api" en trop
-        const stockUpdateResponse = await api.post('/stock/operator', {
-          operator_id: id,
-          type: activeTab === 'megas' ? 'mega' : 'unite',
-          quantity: quantity,
-          operation: 'remove'
-        });
-
-        if (!stockUpdateResponse.data.success) {
-          throw new Error(stockUpdateResponse.data.error || 'Erreur mise à jour stock');
-        }
-        const newStock = currentStock - quantity;
-        setStock(prev => ({ ...prev, [field]: newStock }));
+      if (type === 'supplier_in' || type === 'cooperant_return') {
+        productStats[pid].entries += qty;
+      } else if (type === 'cooperant_take' || type === 'retail_sale') {
+        productStats[pid].exits += qty;
       }
+    });
 
-      const response = await api.post('/sale', saleData);
+    const result = Object.values(productStats).map(p => {
+      const initialStock = p.current_stock - p.entries + p.exits;
+      return {
+        ...p,
+        initialStock: Math.max(initialStock, 0),
+        finalStock: p.current_stock,
+      };
+    });
 
-      if (response.data.success) {
-        setMessage({ text: '✅ Transaction enregistrée avec succès !', type: 'success' });
-        setFormData({
-          client_id: '',
-          amount: '',
-          quantity: '',
-          payment_method: 'cash',
-          note: '',
-          operation_type: 'send',
-          phone_number: '',
-          beneficiary_phone: '',
-          beneficiary_name: '',
-          confirmation_code: ''
-        });
-        await syncAll();
-        await fetchData();
-      } else {
-        setMessage({ text: response.data.error || 'Erreur lors de l\'enregistrement', type: 'error' });
-      }
-    } catch (error) {
-      console.error(error);
-      setMessage({ text: error.message || '❌ Erreur serveur', type: 'error' });
-    } finally {
-      setSaving(false);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Erreur suivi journalier:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 5 : Enregistrer une vente
+// =============================================
+app.post('/api/sale', async (req, res) => {
+  try {
+    const {
+      operator_id,
+      client_id,
+      total_amount,
+      payment_method,
+      note,
+      sale_type,
+      operation_type,
+      phone_number,
+      beneficiary_phone,
+      beneficiary_name,
+      confirmation_code
+    } = req.body;
+
+    if (!operator_id || !client_id || !total_amount) {
+      return res.status(400).json({ success: false, error: 'Champs requis manquants' });
     }
-  };
 
-  if (loading) return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
-      <div style={{ fontSize: '1.5rem', color: '#3b82f6' }}>Chargement...</div>
-    </div>
-  );
+    const saleData = {
+      operator_id,
+      client_id,
+      total_amount: parseFloat(total_amount),
+      payment_method: payment_method || 'cash',
+      note: note || null,
+      sale_type: sale_type || 'emoney',
+      operation_type: operation_type || null,
+      phone_number: phone_number || null,
+      beneficiary_phone: beneficiary_phone || null,
+      beneficiary_name: beneficiary_name || null,
+      confirmation_code: confirmation_code || null,
+      sale_date: new Date().toISOString()
+    };
 
-  if (!operator) return <div>Opérateur non trouvé</div>;
+    const { data: sale, error } = await supabase
+      .from('sales')
+      .insert(saleData)
+      .select()
+      .single();
 
-  const totalSales = sales.reduce((sum, s) => sum + s.total_amount, 0);
-  const displayName = activeTab === 'emoney' ? operator.name : getShortName(operator.name);
+    if (error) throw error;
 
-  const unitPriceMega = parseFloat(settings.mega_price) || parseFloat(settings.default_unit_price) || 500;
-  const unitPriceUnite = parseFloat(settings.unite_price) || parseFloat(settings.default_unit_price) || 500;
-  const currentUnitPrice = activeTab === 'megas' ? unitPriceMega : unitPriceUnite;
+    res.json({ success: true, data: sale });
+  } catch (error) {
+    console.error('Erreur enregistrement vente:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-  return (
-    <div style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
-        <button
-          onClick={() => navigate('/ventes-mega')}
-          style={{ background: 'transparent', border: 'none', fontSize: '1.5rem', cursor: 'pointer' }}
-        >
-          ←
-        </button>
-        <h1 style={{ color: operator.name === 'Vodacom M-Pesa' ? '#dc2626' : '#1e3a8a', margin: 0 }}>
-          💳 {displayName}
-        </h1>
-      </div>
+// =============================================
+// ROUTE 6 : Ajouter du stock à un opérateur
+// =============================================
+app.post('/api/operator/stock/add', async (req, res) => {
+  try {
+    const { operator_id, type, quantity } = req.body;
+    if (!operator_id || !type || !quantity || quantity <= 0) {
+      return res.status(400).json({ success: false, error: 'Champs requis manquants ou invalides' });
+    }
+    const fieldMap = {
+      'mega': 'stock_megas',
+      'unite': 'stock_unites',
+      'fc': 'stock_fc',
+      'usd': 'stock_usd'
+    };
+    const field = fieldMap[type];
+    if (!field) {
+      return res.status(400).json({ success: false, error: 'Type invalide' });
+    }
+    const { data: op, error: fetchError } = await supabase
+      .from('operators')
+      .select(field)
+      .eq('id', operator_id)
+      .single();
+    if (fetchError) throw fetchError;
+    const newValue = (op[field] || 0) + parseInt(quantity);
+    const { error: updateError } = await supabase
+      .from('operators')
+      .update({ [field]: newValue })
+      .eq('id', operator_id);
+    if (updateError) throw updateError;
+    res.json({ success: true, data: { newValue } });
+  } catch (error) {
+    console.error('Erreur ajout stock opérateur:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
-        <div style={{ background: 'white', padding: '1rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-          <p style={{ color: '#6b7280', margin: 0 }}>Ventes du jour</p>
-          <h2 style={{ color: '#1f2937', margin: '0.2rem 0' }}>{totalSales.toFixed(0)} FC</h2>
-          <small style={{ color: '#6b7280' }}>{sales.length} transaction(s)</small>
-        </div>
-        <div style={{ background: 'white', padding: '1rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-          <p style={{ color: '#6b7280', margin: 0 }}>Stock mégas</p>
-          <h2 style={{ color: '#1f2937', margin: '0.2rem 0' }}>{stock.stock_megas}</h2>
-        </div>
-        <div style={{ background: 'white', padding: '1rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-          <p style={{ color: '#6b7280', margin: 0 }}>Stock unités</p>
-          <h2 style={{ color: '#1f2937', margin: '0.2rem 0' }}>{stock.stock_unites}</h2>
-        </div>
-      </div>
+// =============================================
+// ROUTE 7 : Gestion du stock opérateur (ajout/retrait)
+// =============================================
+app.post('/api/stock/operator', async (req, res) => {
+  try {
+    const { operator_id, type, quantity, operation } = req.body;
+    if (!operator_id || !type || quantity === undefined) {
+      return res.status(400).json({ success: false, error: 'Champs requis' });
+    }
+    const field = type === 'mega' ? 'stock_megas' : 'stock_unites';
+    const { data: op, error } = await supabase
+      .from('operators')
+      .select(field)
+      .eq('id', operator_id)
+      .single();
+    if (error) throw error;
+    let newStock = op[field];
+    if (operation === 'add') {
+      newStock += quantity;
+    } else if (operation === 'remove') {
+      if (newStock < quantity) return res.status(400).json({ success: false, error: 'Stock insuffisant' });
+      newStock -= quantity;
+    } else {
+      return res.status(400).json({ success: false, error: 'Opération invalide' });
+    }
+    const { error: updateError } = await supabase
+      .from('operators')
+      .update({ [field]: newStock })
+      .eq('id', operator_id);
+    if (updateError) throw updateError;
+    res.json({ success: true, data: { newStock } });
+  } catch (error) {
+    console.error('Erreur mise à jour stock opérateur:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '2px solid #e5e7eb', marginBottom: '1.5rem' }}>
-        {['megas', 'unites', 'emoney'].map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            style={{
-              padding: '0.5rem 1.5rem',
-              border: 'none',
-              background: activeTab === tab ? '#3b82f6' : 'transparent',
-              color: activeTab === tab ? 'white' : '#1f2937',
-              borderRadius: '0.5rem 0.5rem 0 0',
-              cursor: 'pointer',
-              fontWeight: activeTab === tab ? 'bold' : 'normal',
-              transition: 'all 0.2s'
-            }}
-          >
-            {tab === 'megas' && 'Mégas'}
-            {tab === 'unites' && 'Unités'}
-            {tab === 'emoney' && 'E-money'}
-          </button>
-        ))}
-      </div>
+// =============================================
+// ROUTE 8 : Récupérer le stock d'un opérateur
+// =============================================
+app.get('/api/operators/:id/stock', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('operators')
+      .select('stock_megas, stock_unites')
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur récupération stock opérateur:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-      <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
-        <h3 style={{ marginTop: 0, color: '#1f2937' }}>
-          {activeTab === 'megas' && '➕ Vente de mégas'}
-          {activeTab === 'unites' && '➕ Vente d\'unités'}
-          {activeTab === 'emoney' && '➕ Opération e-money'}
-        </h3>
-        <form onSubmit={handleSubmit}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div>
-              <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Client</label>
-              <select
-                name="client_id"
-                value={formData.client_id}
-                onChange={handleChange}
-                style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                required
-              >
-                <option value="">Sélectionner un client</option>
-                {clients.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Mode de paiement</label>
-              <select
-                name="payment_method"
-                value={formData.payment_method}
-                onChange={handleChange}
-                style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-              >
-                <option value="cash">Espèces</option>
-                <option value="emoney">E-money</option>
-                <option value="credit">Crédit</option>
-              </select>
-            </div>
+// =============================================
+// ROUTE 9 : Récupérer les transactions de caisse
+// =============================================
+app.get('/api/cash/transactions', async (req, res) => {
+  try {
+    const { start_date, end_date } = req.query;
+    let query = supabase
+      .from('cash_transactions')
+      .select('*')
+      .order('transaction_date', { ascending: true });
 
-            {activeTab === 'emoney' && (
-              <>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Type d'opération</label>
-                  <select
-                    name="operation_type"
-                    value={formData.operation_type}
-                    onChange={handleChange}
-                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                  >
-                    <option value="send">Dépôt (Envoi)</option>
-                    <option value="receive">Retrait</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Montant (FC)</label>
-                  <input
-                    type="number"
-                    name="amount"
-                    value={formData.amount}
-                    onChange={handleChange}
-                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                    placeholder="Ex: 5000"
-                    required
-                    step="0.01"
-                    min="0"
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Numéro de téléphone du client</label>
-                  <input
-                    type="text"
-                    name="phone_number"
-                    value={formData.phone_number}
-                    onChange={handleChange}
-                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                    placeholder="Ex: 0612345678"
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Numéro du bénéficiaire</label>
-                  <input
-                    type="text"
-                    name="beneficiary_phone"
-                    value={formData.beneficiary_phone}
-                    onChange={handleChange}
-                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                    placeholder="Ex: 0612345679"
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Nom du bénéficiaire</label>
-                  <input
-                    type="text"
-                    name="beneficiary_name"
-                    value={formData.beneficiary_name}
-                    onChange={handleChange}
-                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                    placeholder="Nom du destinataire"
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Code de confirmation *</label>
-                  <input
-                    type="text"
-                    name="confirmation_code"
-                    value={formData.confirmation_code}
-                    onChange={handleChange}
-                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                    placeholder="Ex: 123456"
-                    required
-                  />
-                </div>
-              </>
-            )}
+    if (start_date) {
+      query = query.gte('transaction_date', `${start_date}T00:00:00`);
+    }
+    if (end_date) {
+      query = query.lte('transaction_date', `${end_date}T23:59:59`);
+    }
 
-            {activeTab !== 'emoney' && (
-              <>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>
-                    Quantité de {activeTab === 'megas' ? 'mégas' : 'unités'}
-                  </label>
-                  <input
-                    type="number"
-                    name="quantity"
-                    value={formData.quantity}
-                    onChange={handleChange}
-                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                    placeholder="Ex: 10"
-                    required
-                    min="1"
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Montant total (FC)</label>
-                  <input
-                    type="text"
-                    value={parseInt(formData.quantity) * currentUnitPrice || 0}
-                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db', background: '#f3f4f6' }}
-                    readOnly
-                  />
-                  <small style={{ color: '#6b7280' }}>Prix unitaire : {currentUnitPrice} FC</small>
-                </div>
-              </>
-            )}
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur récupération transactions:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-            <div style={{ gridColumn: 'span 2' }}>
-              <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Note (optionnel)</label>
-              <input
-                type="text"
-                name="note"
-                value={formData.note}
-                onChange={handleChange}
-                style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
-                placeholder="Ex: Recharge 10 000 FC"
-              />
-            </div>
-          </div>
-          {message.text && (
-            <div style={{
-              padding: '0.5rem',
-              borderRadius: '0.5rem',
-              marginTop: '1rem',
-              background: message.type === 'success' ? '#d1fae5' : '#fecaca',
-              color: message.type === 'success' ? '#065f46' : '#991b1b'
-            }}>
-              {message.text}
-            </div>
-          )}
-          <button
-            type="submit"
-            disabled={saving}
-            style={{
-              marginTop: '1rem',
-              padding: '0.75rem 2rem',
-              background: '#3b82f6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '0.5rem',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              opacity: saving ? 0.7 : 1
-            }}
-          >
-            {saving ? 'Enregistrement...' : 'Enregistrer la transaction'}
-          </button>
-        </form>
-      </div>
+// =============================================
+// ROUTE 10 : Ajouter une transaction de caisse
+// =============================================
+app.post('/api/cash/transaction', async (req, res) => {
+  try {
+    const { type, category, description, amount, payment_method, transaction_date } = req.body;
+    if (!type || !category || !amount) {
+      return res.status(400).json({ success: false, error: 'Champs requis manquants' });
+    }
+    const { data, error } = await supabase
+      .from('cash_transactions')
+      .insert({
+        type,
+        category,
+        description: description || '',
+        amount: parseFloat(amount),
+        payment_method: payment_method || 'cash',
+        transaction_date: transaction_date || new Date().toISOString()
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur ajout transaction:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-      <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-        <h3 style={{ marginTop: 0, color: '#1f2937' }}>📋 Historique des transactions (aujourd'hui)</h3>
-        {sales.length === 0 ? (
-          <p style={{ color: '#6b7280' }}>Aucune transaction enregistrée aujourd'hui pour cet opérateur.</p>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: '#f3f4f6', textAlign: 'left' }}>
-                  <th style={{ padding: '0.5rem' }}>Client</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'center' }}>Montant (FC)</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'center' }}>Type</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'center' }}>Opération</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'center' }}>Paiement</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'center' }}>Date</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'left' }}>Téléphone</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'left' }}>Bénéficiaire</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'left' }}>Code</th>
-                  <th style={{ padding: '0.5rem', textAlign: 'left' }}>Note</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sales.map(s => (
-                  <tr key={s.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                    <td style={{ padding: '0.5rem' }}>{s.clients?.name || 'Client'}</td>
-                    <td style={{ padding: '0.5rem', textAlign: 'center', fontWeight: 'bold' }}>{s.total_amount.toFixed(0)}</td>
-                    <td style={{ padding: '0.5rem', textAlign: 'center' }}>{s.sale_type || '-'}</td>
-                    <td style={{ padding: '0.5rem', textAlign: 'center' }}>
-                      {s.operation_type === 'send' ? 'Dépôt' : s.operation_type === 'receive' ? 'Retrait' : '-'}
-                    </td>
-                    <td style={{ padding: '0.5rem', textAlign: 'center' }}>{s.payment_method === 'cash' ? 'Espèces' : s.payment_method === 'emoney' ? 'E-money' : 'Crédit'}</td>
-                    <td style={{ padding: '0.5rem', textAlign: 'center' }}>{new Date(s.sale_date).toLocaleTimeString()}</td>
-                    <td style={{ padding: '0.5rem' }}>{s.phone_number || '-'}</td>
-                    <td style={{ padding: '0.5rem' }}>{s.beneficiary_name || '-'} ({s.beneficiary_phone || '-'})</td>
-                    <td style={{ padding: '0.5rem' }}>{s.confirmation_code || '-'}</td>
-                    <td style={{ padding: '0.5rem' }}>{s.note || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
+// =============================================
+// ROUTE 11 : Récupérer tous les utilisateurs
+// =============================================
+app.get('/api/users', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, email, full_name, role, active, created_at')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur récupération utilisateurs:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-export default OperatorSales;
+// =============================================
+// ROUTE 12 : Ajouter un utilisateur
+// =============================================
+app.post('/api/users', async (req, res) => {
+  try {
+    const { email, password, full_name, role } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Email et mot de passe requis' });
+    }
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const { data, error } = await supabase
+      .from('users')
+      .insert({ email, password: hashedPassword, full_name, role: role || 'user' })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur ajout utilisateur:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 13 : Modifier un utilisateur
+// =============================================
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, full_name, role, active, password } = req.body;
+    const updateData = { email, full_name, role, active, updated_at: new Date().toISOString() };
+    if (password) {
+      updateData.password = await bcrypt.hash(password, 10);
+    }
+    const { data, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur mise à jour utilisateur:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 14 : Supprimer un utilisateur
+// =============================================
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erreur suppression utilisateur:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 15 : Récupérer les paramètres
+// =============================================
+app.get('/api/settings', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('settings')
+      .select('*')
+      .order('key', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur récupération paramètres:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 16 : Mettre à jour un paramètre
+// =============================================
+app.put('/api/settings/:key', async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { value } = req.body;
+    if (value === undefined) {
+      return res.status(400).json({ success: false, error: 'Valeur requise' });
+    }
+    const { data, error } = await supabase
+      .from('settings')
+      .update({ value, updated_at: new Date().toISOString() })
+      .eq('key', key)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur mise à jour paramètre:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 17 : Connexion (login)
+// =============================================
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Email et mot de passe requis' });
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, email, full_name, role, active, password')
+      .eq('email', email)
+      .single();
+
+    if (error || !user) {
+      return res.status(401).json({ success: false, error: 'Identifiants incorrects' });
+    }
+
+    if (!user.active) {
+      return res.status(401).json({ success: false, error: 'Compte désactivé' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ success: false, error: 'Identifiants incorrects' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    delete user.password;
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+      },
+    });
+  } catch (error) {
+    console.error('Erreur login:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 18 : Vérification du token (me)
+// =============================================
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ success: false, error: 'Token manquant' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, email, full_name, role, active')
+      .eq('id', decoded.id)
+      .single();
+
+    if (error || !user) {
+      return res.status(401).json({ success: false, error: 'Utilisateur introuvable' });
+    }
+
+    res.json({ success: true, user });
+  } catch (error) {
+    console.error('Erreur vérification token:', error);
+    res.status(401).json({ success: false, error: 'Token invalide' });
+  }
+});
+
+// =============================================
+// ✅ EXPORT POUR SERVERLESS (Vercel / Netlify)
+// =============================================
+export default app;
+
+// =============================================
+// DÉMARRAGE DU SERVEUR POUR RENDER (exécution directe)
+// =============================================
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`🚀 Backend démarré sur http://localhost:${PORT}`);
+  });
+}
