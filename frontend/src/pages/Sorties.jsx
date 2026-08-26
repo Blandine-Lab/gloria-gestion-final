@@ -65,11 +65,9 @@ const Sorties = () => {
         return d >= startOfDay && d < endOfDay;
       });
 
-      // Tri chronologique croissant pour numéroter correctement les tours
       allMovements.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-      // --- Calcul des numéros de tour ---
-      const tourMap = {}; // clé : `${cooperant_id}|${product_id}`
+      const tourMap = {};
       const movementsWithTour = allMovements.map((m) => {
         if (m.cooperant_id && m.product_id) {
           const key = `${m.cooperant_id}|${m.product_id}`;
@@ -80,18 +78,14 @@ const Sorties = () => {
             tourMap[key].currentTour += 1;
             return { ...m, tourNumber: tourMap[key].currentTour };
           } else if (m.movement_type === 'cooperant_return') {
-            // Le retour prend le dernier tour en cours (peut être 0 s'il n'y a pas eu de prise avant)
             return { ...m, tourNumber: tourMap[key].currentTour || 0 };
           }
         }
-        // Pour les ventes détail ou mouvements sans coopérant, pas de tour
         return { ...m, tourNumber: null };
       });
 
-      // Remettre dans l'ordre décroissant pour l'affichage (plus récent en premier)
       movementsWithTour.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-      // Enrichissement avec les noms des produits et coopérants
       const productIds = [...new Set(movementsWithTour.map(m => m.product_id).filter(Boolean))];
       const cooperantIds = [...new Set(movementsWithTour.map(m => m.cooperant_id).filter(Boolean))];
 
@@ -240,11 +234,10 @@ const Sorties = () => {
     return result.filter(item => item.netSold !== 0);
   };
 
-  // --- Nouvelle fonction : récapitulatif par tour ---
+  // --- Fonction récapitulatif par tour (avec unitPrice) ---
   const getToursSummary = () => {
     const tours = {};
     movements.forEach(m => {
-      // On ne prend que les mouvements avec coopérant, produit et numéro de tour valide (>0)
       if (!m.cooperant_id || !m.product_id || !m.tourNumber || m.tourNumber === 0) return;
       const key = `${m.cooperant_id}|${m.product_id}|${m.tourNumber}`;
       if (!tours[key]) {
@@ -255,6 +248,7 @@ const Sorties = () => {
           take: 0,
           retour: 0,
           net: 0,
+          unitPrice: m.product?.unit_price || 0, // Ajout du prix unitaire
         };
       }
       const qty = Math.abs(m.quantity_change);
@@ -456,7 +450,6 @@ const Sorties = () => {
                       vente = qty;
                     }
 
-                    // Affichage du numéro de tour
                     let tourDisplay = '';
                     if (m.tourNumber && m.tourNumber > 0) {
                       tourDisplay = `T${m.tourNumber}`;
@@ -544,10 +537,16 @@ const Sorties = () => {
               );
             })()}
 
-            {/* --- Nouveau : Récapitulatif par tour --- */}
+            {/* --- Récapitulatif par tour AVEC MONTANT --- */}
             {(() => {
               const toursSummary = getToursSummary();
               if (toursSummary.length === 0) return null;
+
+              // Calcul du total général des montants
+              let totalMontant = 0;
+              toursSummary.forEach(item => {
+                totalMontant += item.net * item.unitPrice;
+              });
 
               return (
                 <div style={{ marginTop: '1.5rem', borderTop: '2px solid #e5e7eb', paddingTop: '1rem' }}>
@@ -561,20 +560,37 @@ const Sorties = () => {
                           <th style={{ padding: '0.5rem', textAlign: 'center' }}>Tour</th>
                           <th style={{ padding: '0.5rem', textAlign: 'center' }}>Prise</th>
                           <th style={{ padding: '0.5rem', textAlign: 'center' }}>Retour</th>
-                          <th style={{ padding: '0.5rem', textAlign: 'center' }}>Net (prise - retour)</th>
+                          <th style={{ padding: '0.5rem', textAlign: 'center' }}>Net</th>
+                          <th style={{ padding: '0.5rem', textAlign: 'center' }}>Montant (FC)</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {toursSummary.map((item, index) => (
-                          <tr key={index} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                            <td style={{ padding: '0.5rem' }}>{item.cooperantName}</td>
-                            <td style={{ padding: '0.5rem' }}>{item.productName}</td>
-                            <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.tour}</td>
-                            <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.take}</td>
-                            <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.retour}</td>
-                            <td style={{ padding: '0.5rem', textAlign: 'center', fontWeight: 'bold' }}>{item.net}</td>
-                          </tr>
-                        ))}
+                        {toursSummary.map((item, index) => {
+                          const montant = item.net * item.unitPrice;
+                          return (
+                            <tr key={index} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                              <td style={{ padding: '0.5rem' }}>{item.cooperantName}</td>
+                              <td style={{ padding: '0.5rem' }}>{item.productName}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.tour}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.take}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.retour}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center', fontWeight: 'bold' }}>{item.net}</td>
+                              <td style={{ padding: '0.5rem', textAlign: 'center', fontWeight: 'bold' }}>
+                                {montant > 0 ? `${montant.toFixed(0)} FC` : '0 FC'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {/* Ligne de total */}
+                        <tr style={{ background: '#f3f4f6', fontWeight: 'bold', borderTop: '2px solid #1e3a8a' }}>
+                          <td colSpan="5" style={{ padding: '0.5rem', textAlign: 'right' }}>TOTAL GÉNÉRAL</td>
+                          <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>
+                            {toursSummary.reduce((acc, item) => acc + item.net, 0)}
+                          </td>
+                          <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>
+                            {totalMontant.toFixed(0)} FC
+                          </td>
+                        </tr>
                       </tbody>
                     </table>
                   </div>
