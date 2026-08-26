@@ -48,7 +48,6 @@ const OperatorSales = () => {
     try {
       setLoading(true);
 
-      // 1. Charger l'opérateur depuis Dexie
       const op = await db.operators.get(id);
       if (!op) {
         throw new Error('Opérateur introuvable');
@@ -56,17 +55,14 @@ const OperatorSales = () => {
       setOperator(op);
       setStock({ stock_megas: op.stock_megas || 0, stock_unites: op.stock_unites || 0 });
 
-      // 2. Charger les clients depuis Dexie
       const clientsData = await db.clients.toArray();
       setClients(clientsData || []);
 
-      // 3. Charger les paramètres (prix des mégas et unités)
       const settingsData = await db.settings.toArray();
       const settingsObj = {};
       settingsData.forEach(s => { settingsObj[s.key] = s.value; });
       setSettings(settingsObj);
 
-      // 4. Charger les ventes du jour depuis Dexie (table sales)
       const today = new Date();
       const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
@@ -76,7 +72,6 @@ const OperatorSales = () => {
         const saleDate = new Date(s.sale_date);
         return saleDate >= startOfDay && saleDate < endOfDay && s.operator_id === id;
       });
-      // Trier par date décroissante
       filteredSales.sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date));
       setSales(filteredSales);
 
@@ -130,14 +125,13 @@ const OperatorSales = () => {
         saleData.beneficiary_name = formData.beneficiary_name;
         saleData.confirmation_code = formData.confirmation_code;
       } else {
-        // Lecture du prix unitaire depuis les paramètres
         const unitPrice = activeTab === 'megas'
           ? parseFloat(settings.mega_price) || parseFloat(settings.default_unit_price) || 500
           : parseFloat(settings.unite_price) || parseFloat(settings.default_unit_price) || 500;
 
         const quantity = parseInt(formData.quantity);
         saleData.total_amount = quantity * unitPrice;
-        saleData.quantity = quantity; // ajouté pour la trace
+        saleData.quantity = quantity;
         const field = activeTab === 'megas' ? 'stock_megas' : 'stock_unites';
         const currentStock = stock[field];
         if (currentStock < quantity) {
@@ -145,23 +139,23 @@ const OperatorSales = () => {
           setSaving(false);
           return;
         }
-        // Mettre à jour le stock via l'API (route pour retirer du stock opérateur)
-        const stockUpdateResponse = await api.post('/api/stock/operator', {
+
+        // ✅ CORRECTION : supprimer le "/api" en trop
+        const stockUpdateResponse = await api.post('/stock/operator', {
           operator_id: id,
           type: activeTab === 'megas' ? 'mega' : 'unite',
           quantity: quantity,
           operation: 'remove'
         });
+
         if (!stockUpdateResponse.data.success) {
           throw new Error(stockUpdateResponse.data.error || 'Erreur mise à jour stock');
         }
-        // Mettre à jour l'état local
         const newStock = currentStock - quantity;
         setStock(prev => ({ ...prev, [field]: newStock }));
       }
 
-      // Enregistrer la vente via l'API
-      const response = await api.post('/api/sale', saleData);
+      const response = await api.post('/sale', saleData);
 
       if (response.data.success) {
         setMessage({ text: '✅ Transaction enregistrée avec succès !', type: 'success' });
@@ -177,9 +171,7 @@ const OperatorSales = () => {
           beneficiary_name: '',
           confirmation_code: ''
         });
-        // Synchroniser Dexie en arrière-plan
         await syncAll();
-        // Recharger les données locales (pour mettre à jour la liste des ventes et le stock)
         await fetchData();
       } else {
         setMessage({ text: response.data.error || 'Erreur lors de l\'enregistrement', type: 'error' });
@@ -203,7 +195,6 @@ const OperatorSales = () => {
   const totalSales = sales.reduce((sum, s) => sum + s.total_amount, 0);
   const displayName = activeTab === 'emoney' ? operator.name : getShortName(operator.name);
 
-  // Prix unitaires dynamiques
   const unitPriceMega = parseFloat(settings.mega_price) || parseFloat(settings.default_unit_price) || 500;
   const unitPriceUnite = parseFloat(settings.unite_price) || parseFloat(settings.default_unit_price) || 500;
   const currentUnitPrice = activeTab === 'megas' ? unitPriceMega : unitPriceUnite;
