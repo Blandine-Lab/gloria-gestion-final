@@ -304,6 +304,53 @@ app.post('/api/movement', async (req, res) => {
 });
 
 // =============================================
+// ROUTE 2b : Récupérer un produit par ID (AJOUTÉ)
+// =============================================
+app.get('/api/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur récupération produit:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
+// ROUTE 2c : Mettre à jour un mouvement (AJOUTÉ)
+// =============================================
+app.put('/api/movement/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { quantity_change } = req.body;
+
+    if (quantity_change === undefined) {
+      return res.status(400).json({ success: false, error: 'La quantité change est requise' });
+    }
+
+    const { data, error } = await supabase
+      .from('stock_movements')
+      .update({ quantity_change })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Erreur mise à jour mouvement:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =============================================
 // ROUTE 3 : Récupérer les mouvements avec filtres
 // =============================================
 app.get('/api/movements', async (req, res) => {

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../utils/supabaseClient';
 import axios from 'axios';
 import api from '../services/api';
-import db from '../db'; // Base locale Dexie
+import db from '../db';
 import { syncAll } from '../services/syncService';
 
 // Liste des modules disponibles (correspond aux onglets de la navbar)
@@ -52,7 +52,7 @@ const Admin = () => {
   const [clients, setClients] = useState([]);
   const [newClient, setNewClient] = useState({ name: '', phone: '', credit_balance: '' });
 
-  // Utilisateurs (avec permissions)
+  // Utilisateurs
   const [users, setUsers] = useState([]);
   const [showUserModal, setShowUserModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
@@ -63,6 +63,12 @@ const Admin = () => {
     role: 'user',
     active: true,
     permissions: [],
+  });
+
+  // Paramètres de prix
+  const [settings, setSettings] = useState({
+    mega_price: 1000,
+    unite_price: 500,
   });
 
   const [loading, setLoading] = useState(false);
@@ -91,7 +97,7 @@ const Admin = () => {
   };
 
   // =============================================
-  // CHARGEMENT DES DONNÉES (DEPUIS DEXIE)
+  // CHARGEMENT DES DONNÉES
   // =============================================
   const fetchAllData = async () => {
     await Promise.all([
@@ -100,6 +106,7 @@ const Admin = () => {
       fetchOperators(),
       fetchClients(),
       fetchUsers(),
+      fetchSettings(), // Chargement des paramètres
     ]);
   };
 
@@ -148,6 +155,24 @@ const Admin = () => {
       }
     } catch (error) {
       console.error('Erreur chargement utilisateurs:', error);
+    }
+  };
+
+  // Chargement des paramètres (prix des mégas et unités)
+  const fetchSettings = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('settings')
+        .select('*')
+        .in('key', ['mega_price', 'unite_price']);
+      if (error) throw error;
+      const settingsObj = {};
+      data.forEach(item => {
+        settingsObj[item.key] = parseFloat(item.value);
+      });
+      setSettings(prev => ({ ...prev, ...settingsObj }));
+    } catch (error) {
+      console.error('Erreur chargement paramètres:', error);
     }
   };
 
@@ -515,6 +540,35 @@ const Admin = () => {
   };
 
   // =============================================
+  // GESTION DES PARAMÈTRES DE PRIX (MÉGAS ET UNITÉS)
+  // =============================================
+  const handlePriceSettingsSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const updates = [
+        { key: 'mega_price', value: parseFloat(settings.mega_price) || 0 },
+        { key: 'unite_price', value: parseFloat(settings.unite_price) || 0 },
+      ];
+      for (const item of updates) {
+        const { error } = await supabase
+          .from('settings')
+          .upsert({ key: item.key, value: item.value }, { onConflict: 'key' });
+        if (error) throw error;
+      }
+      setMessage({ text: '✅ Prix mis à jour avec succès', type: 'success' });
+      await syncAll();
+      // Recharger les paramètres pour mettre à jour l'état
+      await fetchSettings();
+    } catch (error) {
+      console.error(error);
+      setMessage({ text: '❌ Erreur: ' + error.message, type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =============================================
   // ÉCRAN DE CONNEXION ADMIN
   // =============================================
   if (!isAuthenticated) {
@@ -548,7 +602,7 @@ const Admin = () => {
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem' }}>
       <h1 style={{ marginBottom: '0.5rem', color: '#1e3a8a' }}>⚙️ Administration</h1>
-      <p style={{ color: '#6b7280', marginBottom: '2rem' }}>Gestion des coopérants, produits, opérateurs, clients et utilisateurs</p>
+      <p style={{ color: '#6b7280', marginBottom: '2rem' }}>Gestion des coopérants, produits, opérateurs, clients, utilisateurs et paramètres</p>
 
       {message.text && (
         <div style={{
@@ -561,6 +615,36 @@ const Admin = () => {
           {message.text}
         </div>
       )}
+
+      {/* SECTION : Paramètres des prix (mégas / unités) */}
+      <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
+        <h3 style={{ marginTop: 0 }}>💰 Paramètres des prix</h3>
+        <form onSubmit={handlePriceSettingsSubmit} style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+          <div>
+            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Prix d'un méga (FC)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={settings.mega_price || ''}
+              onChange={(e) => setSettings(prev => ({ ...prev, mega_price: e.target.value }))}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Prix d'une unité (FC)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={settings.unite_price || ''}
+              onChange={(e) => setSettings(prev => ({ ...prev, unite_price: e.target.value }))}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
+            />
+          </div>
+          <button type="submit" disabled={loading} style={{ gridColumn: '1 / -1', padding: '0.5rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}>
+            {loading ? 'Enregistrement...' : '💾 Enregistrer les prix'}
+          </button>
+        </form>
+      </div>
 
       {/* SECTION : Gestion des utilisateurs */}
       <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>

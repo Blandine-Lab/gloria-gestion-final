@@ -18,6 +18,11 @@ const Sorties = () => {
   const [message, setMessage] = useState({ text: '', type: '' });
   const [dataLoading, setDataLoading] = useState(true);
 
+  // États pour la modification
+  const [editingMovement, setEditingMovement] = useState(null);
+  const [editQuantity, setEditQuantity] = useState('');
+  const [showEditModal, setShowEditModal] = useState(false);
+
   useEffect(() => {
     const loadData = async () => {
       setDataLoading(true);
@@ -165,6 +170,88 @@ const Sorties = () => {
     }
   };
 
+  // =============================================
+  // Gestion de la modification
+  // =============================================
+  const openEditModal = (movement) => {
+    setEditingMovement(movement);
+    setEditQuantity(Math.abs(movement.quantity_change).toString());
+    setShowEditModal(true);
+  };
+
+  const closeEditModal = () => {
+    setShowEditModal(false);
+    setEditingMovement(null);
+    setEditQuantity('');
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    const newQty = parseInt(editQuantity);
+    if (!newQty || newQty < 1) {
+      setMessage({ text: 'La quantité doit être positive', type: 'error' });
+      return;
+    }
+
+    const movement = editingMovement;
+    const oldQty = Math.abs(movement.quantity_change);
+    const diff = newQty - oldQty; // positif => augmentation de la sortie (stock diminue), négatif => diminution
+
+    setLoading(true);
+    setMessage({ text: '', type: '' });
+
+    try {
+      // 1. Récupérer le produit pour vérifier le stock
+      const productId = movement.product_id;
+      const { data: product, error: prodError } = await api.get(`/products/${productId}`);
+      if (prodError) throw prodError;
+      let currentStock = product.current_stock;
+
+      // 2. Calcul du nouveau stock
+      if (movement.movement_type === 'cooperant_take' || movement.movement_type === 'retail_sale') {
+        // Sortie : si on augmente la quantité, le stock baisse ; si on diminue, le stock augmente
+        if (diff > 0 && currentStock < diff) {
+          setMessage({ text: '❌ Stock insuffisant pour cette augmentation', type: 'error' });
+          setLoading(false);
+          return;
+        }
+        currentStock -= diff;
+      } else if (movement.movement_type === 'cooperant_return') {
+        // Entrée : si on augmente la quantité, le stock augmente ; si on diminue, le stock baisse
+        currentStock += diff;
+      } else {
+        setMessage({ text: 'Type de mouvement non modifiable', type: 'error' });
+        setLoading(false);
+        return;
+      }
+
+      // 3. Mettre à jour le produit
+      await api.put(`/products/${productId}`, { current_stock: currentStock });
+
+      // 4. Mettre à jour le mouvement dans Supabase
+      const quantityChange = (movement.movement_type === 'cooperant_take' || movement.movement_type === 'retail_sale')
+        ? -newQty
+        : newQty;
+
+      await api.put(`/movement/${movement.id}`, {
+        quantity_change: quantityChange
+      });
+
+      // 5. Synchroniser Dexie et rafraîchir l'affichage
+      await syncAll();
+      await fetchData();
+      await fetchMovements();
+
+      setMessage({ text: '✅ Mouvement modifié avec succès', type: 'success' });
+      closeEditModal();
+    } catch (error) {
+      console.error('Erreur modification:', error);
+      setMessage({ text: '❌ Erreur lors de la modification', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const typeLabels = {
     cooperant_take: 'Prise',
     cooperant_return: 'Retour',
@@ -234,7 +321,6 @@ const Sorties = () => {
     return result.filter(item => item.netSold !== 0);
   };
 
-  // --- Fonction récapitulatif par tour (avec unitPrice) ---
   const getToursSummary = () => {
     const tours = {};
     movements.forEach(m => {
@@ -284,7 +370,7 @@ const Sorties = () => {
         </div>
       )}
 
-      {/* Formulaire */}
+      {/* Formulaire d'ajout */}
       <form onSubmit={handleSubmit} style={{ background: 'white', padding: '2rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
         <div style={{ marginBottom: '1rem' }}>
           <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Type de mouvement</label>
@@ -431,6 +517,7 @@ const Sorties = () => {
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Paquets</th>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Montant (FC)</th>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Stock après</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'center' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -459,6 +546,9 @@ const Sorties = () => {
                       tourDisplay = '';
                     }
 
+                    // Autoriser la modification pour tout sauf supplier_in
+                    const canEdit = m.movement_type !== 'supplier_in';
+
                     return (
                       <tr key={m.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
                         <td style={{ padding: '0.75rem' }}>{tourDisplay}</td>
@@ -474,6 +564,16 @@ const Sorties = () => {
                           {amount > 0 ? `${amount.toFixed(0)} FC` : '-'}
                         </td>
                         <td style={{ padding: '0.75rem' }}>{product.current_stock ?? '?'}</td>
+                        <td style={{ padding: '0.75rem', textAlign: 'center' }}>
+                          {canEdit && (
+                            <button
+                              onClick={() => openEditModal(m)}
+                              style={{ background: '#f59e0b', color: 'white', border: 'none', padding: '0.2rem 0.6rem', borderRadius: '0.25rem', cursor: 'pointer' }}
+                            >
+                              ✏️ Modifier
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -537,7 +637,7 @@ const Sorties = () => {
               );
             })()}
 
-            {/* --- Récapitulatif par tour AVEC TOTAUX PAR TOUR --- */}
+            {/* Récapitulatif par tour AVEC TOTAUX PAR TOUR */}
             {(() => {
               const toursSummary = getToursSummary();
               if (toursSummary.length === 0) return null;
@@ -632,6 +732,64 @@ const Sorties = () => {
           </>
         )}
       </div>
+
+      {/* Modal de modification */}
+      {showEditModal && editingMovement && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, width: '100%', height: '100%',
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 2000,
+        }}>
+          <div style={{
+            background: 'white',
+            padding: '2rem',
+            borderRadius: '1rem',
+            maxWidth: '500px',
+            width: '90%',
+            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+          }}>
+            <h3 style={{ marginTop: 0, color: '#1f2937' }}>✏️ Modifier la quantité</h3>
+            <p>
+              <strong>Produit :</strong> {editingMovement.product?.name || 'Inconnu'}<br />
+              <strong>Type :</strong> {typeLabels[editingMovement.movement_type] || editingMovement.movement_type}<br />
+              <strong>Quantité actuelle :</strong> {Math.abs(editingMovement.quantity_change)}
+            </p>
+            <form onSubmit={handleEditSubmit}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.2rem' }}>Nouvelle quantité</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={editQuantity}
+                  onChange={(e) => setEditQuantity(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={closeEditModal}
+                  style={{ padding: '0.5rem 1.5rem', background: '#9ca3af', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={{ padding: '0.5rem 1.5rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', opacity: loading ? 0.7 : 1 }}
+                >
+                  {loading ? 'Modification...' : 'Modifier'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
