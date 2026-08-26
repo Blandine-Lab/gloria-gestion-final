@@ -12,7 +12,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Route de test pour vérifier que le backend répond
+// Route de test
 app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend OK' });
 });
@@ -22,7 +22,7 @@ console.log('🔑 VITE_SUPABASE_URL:', process.env.VITE_SUPABASE_URL ? 'défini'
 console.log('🔑 SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'défini' : 'NON DÉFINI');
 console.log('🔑 JWT_SECRET:', process.env.JWT_SECRET ? 'défini' : 'NON DÉFINI');
 
-// Client Supabase avec transport WebSocket
+// Client Supabase
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -203,7 +203,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
 });
 
 // =============================================
-// ROUTE 2 : Enregistrer un mouvement de stock
+// ROUTE 2 : Enregistrer un mouvement de stock (AVEC LOGIQUE DE TOUR)
 // =============================================
 app.post('/api/movement', async (req, res) => {
   try {
@@ -213,6 +213,7 @@ app.post('/api/movement', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Champs requis manquants' });
     }
 
+    // Récupérer le produit pour vérifier le stock
     const { data: product, error: productError } = await supabase
       .from('products')
       .select('current_stock')
@@ -222,18 +223,23 @@ app.post('/api/movement', async (req, res) => {
     if (productError) throw productError;
 
     let newStock = product.current_stock;
+    let quantityChange;
 
+    // Calcul du changement de stock et validation
     if (movement_type === 'cooperant_take' || movement_type === 'retail_sale') {
       if (product.current_stock < quantity) {
         return res.status(400).json({ success: false, error: 'Stock insuffisant' });
       }
       newStock = product.current_stock - quantity;
+      quantityChange = -quantity;
     } else if (movement_type === 'cooperant_return' || movement_type === 'supplier_in') {
       newStock = product.current_stock + quantity;
+      quantityChange = quantity;
     } else {
       return res.status(400).json({ success: false, error: 'Type de mouvement invalide' });
     }
 
+    // Mise à jour du stock produit
     const { error: updateError } = await supabase
       .from('products')
       .update({ current_stock: newStock })
@@ -241,10 +247,39 @@ app.post('/api/movement', async (req, res) => {
 
     if (updateError) throw updateError;
 
-    const quantityChange = (movement_type === 'cooperant_take' || movement_type === 'retail_sale')
-      ? -quantity
-      : quantity;
+    // --- Calcul du tour_number ---
+    let tourNumber = null;
+    if (movement_type === 'cooperant_take') {
+      // Récupérer le dernier tour pour ce couple (cooperant_id, product_id)
+      const { data: lastTake, error: takeError } = await supabase
+        .from('stock_movements')
+        .select('tour_number')
+        .eq('cooperant_id', cooperant_id)
+        .eq('product_id', product_id)
+        .eq('movement_type', 'cooperant_take')
+        .order('tour_number', { ascending: false })
+        .limit(1);
 
+      if (takeError) throw takeError;
+      const lastTour = lastTake && lastTake.length > 0 ? lastTake[0].tour_number : 0;
+      tourNumber = lastTour + 1;
+    } else if (movement_type === 'cooperant_return') {
+      // Récupérer le dernier tour d'une prise pour ce couple
+      const { data: lastTake, error: takeError } = await supabase
+        .from('stock_movements')
+        .select('tour_number')
+        .eq('cooperant_id', cooperant_id)
+        .eq('product_id', product_id)
+        .eq('movement_type', 'cooperant_take')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (takeError) throw takeError;
+      tourNumber = lastTake && lastTake.length > 0 ? lastTake[0].tour_number : 0;
+    }
+    // Pour retail_sale, supplier_in, on laisse null
+
+    // Insertion du mouvement avec le tour_number
     const { data: movement, error: moveError } = await supabase
       .from('stock_movements')
       .insert({
@@ -253,7 +288,8 @@ app.post('/api/movement', async (req, res) => {
         movement_type,
         cooperant_id: cooperant_id || null,
         reference_id: reference_id || null,
-        reason: reason || ''
+        reason: reason || '',
+        tour_number: tourNumber
       })
       .select()
       .single();
@@ -806,7 +842,6 @@ export default app;
 // =============================================
 // DÉMARRAGE DU SERVEUR POUR RENDER (exécution directe)
 // =============================================
-// Détecter si le fichier est exécuté directement (pas importé)
 if (import.meta.url === `file://${process.argv[1]}`) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {

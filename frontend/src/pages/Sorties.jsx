@@ -16,7 +16,7 @@ const Sorties = () => {
   const [movementType, setMovementType] = useState('cooperant_take');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ text: '', type: '' });
-  const [dataLoading, setDataLoading] = useState(true); // ✅ Indicateur de chargement initial
+  const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
     const loadData = async () => {
@@ -65,10 +65,35 @@ const Sorties = () => {
         return d >= startOfDay && d < endOfDay;
       });
 
-      allMovements.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      // Tri chronologique croissant pour numéroter correctement les tours
+      allMovements.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-      const productIds = [...new Set(allMovements.map(m => m.product_id).filter(Boolean))];
-      const cooperantIds = [...new Set(allMovements.map(m => m.cooperant_id).filter(Boolean))];
+      // --- Calcul des numéros de tour ---
+      const tourMap = {}; // clé : `${cooperant_id}|${product_id}`
+      const movementsWithTour = allMovements.map((m) => {
+        if (m.cooperant_id && m.product_id) {
+          const key = `${m.cooperant_id}|${m.product_id}`;
+          if (!tourMap[key]) {
+            tourMap[key] = { currentTour: 0 };
+          }
+          if (m.movement_type === 'cooperant_take') {
+            tourMap[key].currentTour += 1;
+            return { ...m, tourNumber: tourMap[key].currentTour };
+          } else if (m.movement_type === 'cooperant_return') {
+            // Le retour prend le dernier tour en cours (peut être 0 s'il n'y a pas eu de prise avant)
+            return { ...m, tourNumber: tourMap[key].currentTour || 0 };
+          }
+        }
+        // Pour les ventes détail ou mouvements sans coopérant, pas de tour
+        return { ...m, tourNumber: null };
+      });
+
+      // Remettre dans l'ordre décroissant pour l'affichage (plus récent en premier)
+      movementsWithTour.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      // Enrichissement avec les noms des produits et coopérants
+      const productIds = [...new Set(movementsWithTour.map(m => m.product_id).filter(Boolean))];
+      const cooperantIds = [...new Set(movementsWithTour.map(m => m.cooperant_id).filter(Boolean))];
 
       const productsMap = {};
       if (productIds.length > 0) {
@@ -81,7 +106,7 @@ const Sorties = () => {
         sellersList.forEach(s => { if (s) sellersMap[s.id] = s; });
       }
 
-      const enriched = allMovements.map(m => ({
+      const enriched = movementsWithTour.map(m => ({
         ...m,
         product: productsMap[m.product_id] || null,
         cooperant: sellersMap[m.cooperant_id] || null,
@@ -95,7 +120,6 @@ const Sorties = () => {
     }
   };
 
-  // ✅ Fonction de rafraîchissement manuel
   const handleRefresh = async () => {
     setDataLoading(true);
     if (navigator.onLine) {
@@ -147,7 +171,6 @@ const Sorties = () => {
     }
   };
 
-  // Traductions des types
   const typeLabels = {
     cooperant_take: 'Prise',
     cooperant_return: 'Retour',
@@ -217,13 +240,42 @@ const Sorties = () => {
     return result.filter(item => item.netSold !== 0);
   };
 
+  // --- Nouvelle fonction : récapitulatif par tour ---
+  const getToursSummary = () => {
+    const tours = {};
+    movements.forEach(m => {
+      // On ne prend que les mouvements avec coopérant, produit et numéro de tour valide (>0)
+      if (!m.cooperant_id || !m.product_id || !m.tourNumber || m.tourNumber === 0) return;
+      const key = `${m.cooperant_id}|${m.product_id}|${m.tourNumber}`;
+      if (!tours[key]) {
+        tours[key] = {
+          cooperantName: m.cooperant?.name || 'Inconnu',
+          productName: m.product?.name || 'Inconnu',
+          tour: m.tourNumber,
+          take: 0,
+          retour: 0,
+          net: 0,
+        };
+      }
+      const qty = Math.abs(m.quantity_change);
+      if (m.movement_type === 'cooperant_take') {
+        tours[key].take += qty;
+      } else if (m.movement_type === 'cooperant_return') {
+        tours[key].retour += qty;
+      }
+      tours[key].net = tours[key].take - tours[key].retour;
+    });
+    return Object.values(tours).sort((a, b) => 
+      a.cooperantName.localeCompare(b.cooperantName) || a.tour - b.tour
+    );
+  };
+
   return (
     <div style={{ padding: '2rem', maxWidth: '1100px', margin: '0 auto' }}>
       <h1 style={{ marginBottom: '1.5rem', color: '#dc2626', fontWeight: 'bold' }}>
         📦 Sorties / Ventes
       </h1>
 
-      {/* ✅ Message d'information si les données sont vides */}
       {!dataLoading && products.length === 0 && sellers.length === 0 && (
         <div style={{ background: '#fef3c7', padding: '1rem', borderRadius: '0.5rem', marginBottom: '1rem', border: '1px solid #f59e0b' }}>
           ⚠️ Aucune donnée disponible. Veuillez vous connecter à Internet pour synchroniser les produits et coopérants.
@@ -348,7 +400,7 @@ const Sorties = () => {
           <option value="retail_sale">Vente détail</option>
         </select>
         <button
-          onClick={handleRefresh} // ✅ Utilise la même fonction de rafraîchissement
+          onClick={handleRefresh}
           style={{ padding: '0.5rem 1rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}
         >
           🔄 Appliquer filtres & Rafraîchir
@@ -374,6 +426,7 @@ const Sorties = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: '#f3f4f6' }}>
+                    <th style={{ padding: '0.75rem', textAlign: 'left' }}>Tour</th>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Heure</th>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Type</th>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Coopérant</th>
@@ -403,8 +456,19 @@ const Sorties = () => {
                       vente = qty;
                     }
 
+                    // Affichage du numéro de tour
+                    let tourDisplay = '';
+                    if (m.tourNumber && m.tourNumber > 0) {
+                      tourDisplay = `T${m.tourNumber}`;
+                    } else if (m.movement_type === 'retail_sale') {
+                      tourDisplay = '—';
+                    } else {
+                      tourDisplay = '';
+                    }
+
                     return (
                       <tr key={m.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                        <td style={{ padding: '0.75rem' }}>{tourDisplay}</td>
                         <td style={{ padding: '0.75rem' }}>{new Date(m.created_at).toLocaleTimeString()}</td>
                         <td style={{ padding: '0.75rem' }}>{typeLabels[m.movement_type] || m.movement_type}</td>
                         <td style={{ padding: '0.75rem' }}>{cooperant.name || '-'}</td>
@@ -424,7 +488,7 @@ const Sorties = () => {
               </table>
             </div>
 
-            {/* Récapitulatif détaillé */}
+            {/* Récapitulatif détaillé (par coopérant & produit) */}
             {(() => {
               const summary = getDetailedSummary();
               if (summary.length === 0) return null;
@@ -469,12 +533,48 @@ const Sorties = () => {
                           </tr>
                         ))}
                         <tr style={{ background: '#f3f4f6', fontWeight: 'bold', borderTop: '2px solid #1e3a8a' }}>
-                          <td colSpan="3" style={{ padding: '0.5rem', textAlign: 'right' }}>TOTAL GÉNÉRAL</td>
-                          <td style={{ padding: '0.5rem', textAlign: 'center' }}>—</td>
-                          <td style={{ padding: '0.5rem', textAlign: 'center' }}>—</td>
+                          <td colSpan="5" style={{ padding: '0.5rem', textAlign: 'right' }}>TOTAL GÉNÉRAL</td>
                           <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>{totalNetSold}</td>
                           <td style={{ padding: '0.5rem', textAlign: 'center', color: '#1e3a8a' }}>{totalAmount.toFixed(0)} FC</td>
                         </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* --- Nouveau : Récapitulatif par tour --- */}
+            {(() => {
+              const toursSummary = getToursSummary();
+              if (toursSummary.length === 0) return null;
+
+              return (
+                <div style={{ marginTop: '1.5rem', borderTop: '2px solid #e5e7eb', paddingTop: '1rem' }}>
+                  <h4 style={{ marginBottom: '0.5rem' }}>🔄 Détail par tour (coopérant / produit)</h4>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ background: '#e5e7eb' }}>
+                          <th style={{ padding: '0.5rem', textAlign: 'left' }}>Coopérant</th>
+                          <th style={{ padding: '0.5rem', textAlign: 'left' }}>Produit</th>
+                          <th style={{ padding: '0.5rem', textAlign: 'center' }}>Tour</th>
+                          <th style={{ padding: '0.5rem', textAlign: 'center' }}>Prise</th>
+                          <th style={{ padding: '0.5rem', textAlign: 'center' }}>Retour</th>
+                          <th style={{ padding: '0.5rem', textAlign: 'center' }}>Net (prise - retour)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {toursSummary.map((item, index) => (
+                          <tr key={index} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                            <td style={{ padding: '0.5rem' }}>{item.cooperantName}</td>
+                            <td style={{ padding: '0.5rem' }}>{item.productName}</td>
+                            <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.tour}</td>
+                            <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.take}</td>
+                            <td style={{ padding: '0.5rem', textAlign: 'center' }}>{item.retour}</td>
+                            <td style={{ padding: '0.5rem', textAlign: 'center', fontWeight: 'bold' }}>{item.net}</td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>
