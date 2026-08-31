@@ -4,6 +4,7 @@ import db from '../db';
 import { syncAll } from '../services/syncService';
 
 const Sorties = () => {
+  // États existants
   const [products, setProducts] = useState([]);
   const [sellers, setSellers] = useState([]);
   const [movements, setMovements] = useState([]);
@@ -23,6 +24,58 @@ const Sorties = () => {
   const [editQuantity, setEditQuantity] = useState('');
   const [showEditModal, setShowEditModal] = useState(false);
 
+  // === NOUVEAUX ÉTATS POUR LE FILTRAGE PAR PÉRIODE ===
+  const [dateRange, setDateRange] = useState('today'); // 'today' | 'week' | 'month' | 'custom'
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+
+  // Fonction utilitaire pour obtenir les bornes de dates en UTC
+  const getDateRangeBounds = (range, startStr, endStr) => {
+    const now = new Date();
+    let start = new Date();
+    let end = new Date();
+
+    switch (range) {
+      case 'today':
+        start.setUTCHours(0, 0, 0, 0);
+        end.setUTCHours(23, 59, 59, 999);
+        break;
+      case 'week':
+        // Du lundi au dimanche (commence le lundi)
+        const day = now.getUTCDay(); // 0 dimanche, 1 lundi...
+        const diff = (day === 0 ? 6 : day - 1); // nombre de jours depuis lundi
+        start = new Date(now);
+        start.setUTCDate(now.getUTCDate() - diff);
+        start.setUTCHours(0, 0, 0, 0);
+        end = new Date(start);
+        end.setUTCDate(start.getUTCDate() + 6);
+        end.setUTCHours(23, 59, 59, 999);
+        break;
+      case 'month':
+        start = new Date(now.getUTCFullYear(), now.getUTCMonth(), 1);
+        start.setUTCHours(0, 0, 0, 0);
+        end = new Date(now.getUTCFullYear(), now.getUTCMonth() + 1, 0);
+        end.setUTCHours(23, 59, 59, 999);
+        break;
+      case 'custom':
+        if (!startStr || !endStr) {
+          // fallback sur aujourd'hui si les dates ne sont pas fournies
+          start = new Date();
+          start.setUTCHours(0, 0, 0, 0);
+          end = new Date();
+          end.setUTCHours(23, 59, 59, 999);
+        } else {
+          start = new Date(startStr + 'T00:00:00.000Z');
+          end = new Date(endStr + 'T23:59:59.999Z');
+        }
+        break;
+      default:
+        start.setUTCHours(0, 0, 0, 0);
+        end.setUTCHours(23, 59, 59, 999);
+    }
+    return { start, end };
+  };
+
   useEffect(() => {
     const loadData = async () => {
       setDataLoading(true);
@@ -33,9 +86,10 @@ const Sorties = () => {
     loadData();
   }, []);
 
+  // Recharger les mouvements quand le filtre de période change
   useEffect(() => {
     fetchMovements();
-  }, [filterCooperant, filterType]);
+  }, [filterCooperant, filterType, dateRange, customStartDate, customEndDate]);
 
   const fetchData = async () => {
     try {
@@ -54,6 +108,7 @@ const Sorties = () => {
     try {
       let allMovements = await db.stockMovements.toArray();
 
+      // Filtres coopérant et type
       if (filterCooperant) {
         allMovements = allMovements.filter(m => m.cooperant_id === filterCooperant);
       }
@@ -61,18 +116,18 @@ const Sorties = () => {
         allMovements = allMovements.filter(m => m.movement_type === filterType);
       }
 
-      const today = new Date();
-      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
-
+      // === FILTRAGE PAR PÉRIODE (en UTC) ===
+      const { start, end } = getDateRangeBounds(dateRange, customStartDate, customEndDate);
       allMovements = allMovements.filter(m => {
         const d = new Date(m.created_at);
-        return d >= startOfDay && d < endOfDay;
+        // On compare les timestamps en UTC
+        return d.getTime() >= start.getTime() && d.getTime() <= end.getTime();
       });
 
       // Tri chronologique croissant pour numéroter correctement les tours
       allMovements.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
+      // Numérotation des tours (inchangée)
       const tourMap = {};
       const movementsWithTour = allMovements.map((m) => {
         if (m.cooperant_id && m.product_id) {
@@ -90,7 +145,7 @@ const Sorties = () => {
         return { ...m, tourNumber: null };
       });
 
-      // Enrichissement avec les noms des produits et coopérants
+      // Enrichissement avec les noms
       const productIds = [...new Set(movementsWithTour.map(m => m.product_id).filter(Boolean))];
       const cooperantIds = [...new Set(movementsWithTour.map(m => m.cooperant_id).filter(Boolean))];
 
@@ -105,15 +160,13 @@ const Sorties = () => {
         sellersList.forEach(s => { if (s) sellersMap[s.id] = s; });
       }
 
-      // Enrichir les mouvements
       const enriched = movementsWithTour.map(m => ({
         ...m,
         product: productsMap[m.product_id] || null,
         cooperant: sellersMap[m.cooperant_id] || null,
       }));
 
-      // --- Calcul du stock après chaque mouvement ---
-      // Regrouper les mouvements par produit
+      // Calcul du stock après chaque mouvement (inchangé)
       const productMovementsMap = {};
       enriched.forEach(m => {
         if (!m.product_id) return;
@@ -121,23 +174,17 @@ const Sorties = () => {
         productMovementsMap[m.product_id].push(m);
       });
 
-      // Pour chaque produit, trier les mouvements du plus récent au plus ancien
-      // et calculer le stock après chaque mouvement
       for (const [productId, movementsOfProduct] of Object.entries(productMovementsMap)) {
-        // Trier par date décroissante (le plus récent en premier)
         movementsOfProduct.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        // Stock final du produit
         const product = productsMap[productId];
         let stock = product ? product.current_stock : 0;
-        // Parcourir du plus récent au plus ancien
         movementsOfProduct.forEach(m => {
           m.stockAfter = stock;
-          // Reculer d'un mouvement : le stock avant ce mouvement était stock - quantity_change
           stock = stock - m.quantity_change;
         });
       }
 
-      // Remettre dans l'ordre décroissant pour l'affichage (plus récent en premier)
+      // Tri final : du plus récent au plus ancien
       enriched.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
       setMovements(enriched);
@@ -199,9 +246,7 @@ const Sorties = () => {
     }
   };
 
-  // =============================================
-  // Gestion de la modification
-  // =============================================
+  // === GESTION DE LA MODIFICATION (inchangée) ===
   const openEditModal = (movement) => {
     setEditingMovement(movement);
     setEditQuantity(Math.abs(movement.quantity_change).toString());
@@ -274,6 +319,7 @@ const Sorties = () => {
     }
   };
 
+  // === FONCTIONS UTILITAIRES (inchangées) ===
   const typeLabels = {
     cooperant_take: 'Prise',
     cooperant_return: 'Retour',
@@ -372,6 +418,7 @@ const Sorties = () => {
     );
   };
 
+  // === RENDU ===
   return (
     <div style={{ padding: '2rem', maxWidth: '1100px', margin: '0 auto' }}>
       <h1 style={{ marginBottom: '1.5rem', color: '#dc2626', fontWeight: 'bold' }}>
@@ -392,7 +439,7 @@ const Sorties = () => {
         </div>
       )}
 
-      {/* Formulaire d'ajout */}
+      {/* Formulaire d'ajout (inchangé) */}
       <form onSubmit={handleSubmit} style={{ background: 'white', padding: '2rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '2rem' }}>
         <div style={{ marginBottom: '1rem' }}>
           <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>Type de mouvement</label>
@@ -479,7 +526,7 @@ const Sorties = () => {
         </button>
       </form>
 
-      {/* Filtres */}
+      {/* Filtres (coopérant, type, période) */}
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <select
           value={filterCooperant}
@@ -491,6 +538,7 @@ const Sorties = () => {
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
+
         <select
           value={filterType}
           onChange={(e) => setFilterType(e.target.value)}
@@ -501,11 +549,41 @@ const Sorties = () => {
           <option value="cooperant_return">Retour</option>
           <option value="retail_sale">Vente détail</option>
         </select>
+
+        {/* Sélecteur de période */}
+        <select
+          value={dateRange}
+          onChange={(e) => setDateRange(e.target.value)}
+          style={{ padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
+        >
+          <option value="today">Aujourd'hui</option>
+          <option value="week">Cette semaine</option>
+          <option value="month">Ce mois</option>
+          <option value="custom">Personnalisé</option>
+        </select>
+
+        {dateRange === 'custom' && (
+          <>
+            <input
+              type="date"
+              value={customStartDate}
+              onChange={(e) => setCustomStartDate(e.target.value)}
+              style={{ padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
+            />
+            <input
+              type="date"
+              value={customEndDate}
+              onChange={(e) => setCustomEndDate(e.target.value)}
+              style={{ padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
+            />
+          </>
+        )}
+
         <button
           onClick={handleRefresh}
           style={{ padding: '0.5rem 1rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}
         >
-          🔄 Appliquer filtres & Rafraîchir
+          🔄 Rafraîchir
         </button>
         {navigator.onLine && (
           <button
@@ -519,9 +597,9 @@ const Sorties = () => {
 
       {/* Historique */}
       <div style={{ background: 'white', padding: '1.5rem', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-        <h3 style={{ marginTop: 0 }}>📋 Historique des mouvements (aujourd'hui)</h3>
+        <h3 style={{ marginTop: 0 }}>📋 Historique des mouvements</h3>
         {movements.length === 0 ? (
-          <p style={{ color: '#6b7280' }}>Aucun mouvement enregistré aujourd'hui.</p>
+          <p style={{ color: '#6b7280' }}>Aucun mouvement pour la période sélectionnée.</p>
         ) : (
           <>
             <div style={{ overflowX: 'auto' }}>
@@ -529,7 +607,7 @@ const Sorties = () => {
                 <thead>
                   <tr style={{ background: '#f3f4f6' }}>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Tour</th>
-                    <th style={{ padding: '0.75rem', textAlign: 'left' }}>Heure</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'left' }}>Date / Heure</th>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Type</th>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Coopérant</th>
                     <th style={{ padding: '0.75rem', textAlign: 'left' }}>Produit</th>
@@ -569,14 +647,17 @@ const Sorties = () => {
                     }
 
                     const canEdit = m.movement_type !== 'supplier_in';
-
-                    // Le stock après est maintenant stocké dans m.stockAfter
                     const stockAfter = m.stockAfter !== undefined ? m.stockAfter : '?';
+
+                    // Affichage de la date et heure en local
+                    const dateObj = new Date(m.created_at);
+                    const dateStr = dateObj.toLocaleDateString();
+                    const timeStr = dateObj.toLocaleTimeString();
 
                     return (
                       <tr key={m.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
                         <td style={{ padding: '0.75rem' }}>{tourDisplay}</td>
-                        <td style={{ padding: '0.75rem' }}>{new Date(m.created_at).toLocaleTimeString()}</td>
+                        <td style={{ padding: '0.75rem' }}>{dateStr} {timeStr}</td>
                         <td style={{ padding: '0.75rem' }}>{typeLabels[m.movement_type] || m.movement_type}</td>
                         <td style={{ padding: '0.75rem' }}>{cooperant.name || '-'}</td>
                         <td style={{ padding: '0.75rem' }}>{product.name || '-'}</td>
@@ -605,7 +686,7 @@ const Sorties = () => {
               </table>
             </div>
 
-            {/* Récapitulatif détaillé (par coopérant & produit) */}
+            {/* Récapitulatif détaillé (inchangé) */}
             {(() => {
               const summary = getDetailedSummary();
               if (summary.length === 0) return null;
@@ -661,12 +742,11 @@ const Sorties = () => {
               );
             })()}
 
-            {/* Récapitulatif par tour AVEC TOTAUX PAR TOUR */}
+            {/* Récapitulatif par tour (inchangé) */}
             {(() => {
               const toursSummary = getToursSummary();
               if (toursSummary.length === 0) return null;
 
-              // Grouper par (cooperant, tour)
               const groups = [];
               let currentGroup = null;
               let groupItems = [];
@@ -686,7 +766,6 @@ const Sorties = () => {
                 groups.push({ ...currentGroup, items: groupItems });
               }
 
-              // Calcul des totaux par groupe
               groups.forEach(group => {
                 group.totalTake = group.items.reduce((acc, item) => acc + item.take, 0);
                 group.totalRetour = group.items.reduce((acc, item) => acc + item.retour, 0);
@@ -756,7 +835,7 @@ const Sorties = () => {
         )}
       </div>
 
-      {/* Modal de modification */}
+      {/* Modal de modification (inchangée) */}
       {showEditModal && editingMovement && (
         <div style={{
           position: 'fixed',
